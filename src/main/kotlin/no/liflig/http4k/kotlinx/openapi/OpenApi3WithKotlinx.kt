@@ -5,9 +5,12 @@ import no.liflig.http4k.kotlinx.jsonschema.NullableStrategy
 import org.http4k.contract.ErrorResponseRenderer
 import org.http4k.contract.JsonErrorResponseRenderer
 import org.http4k.contract.openapi.ApiInfo
+import org.http4k.contract.openapi.ApiRenderer
 import org.http4k.contract.openapi.OpenApiExtension
 import org.http4k.contract.openapi.OpenApiVersion
 import org.http4k.contract.openapi.SecurityRenderer
+import org.http4k.contract.openapi.cached
+import org.http4k.contract.openapi.v3.Api
 import org.http4k.contract.openapi.v3.ApiServer
 import org.http4k.contract.openapi.v3.OpenApi3
 import org.http4k.contract.openapi.v3.OpenApi3SecurityRenderer
@@ -19,6 +22,9 @@ import org.http4k.format.Json
  *
  * Defaults to OpenAPI 3.1.0. Nullable representation is controlled by [NullableStrategy] on the
  * schema creator (defaults to [NullableStrategy.TYPE_ARRAY] for code generator compatibility).
+ *
+ * The [ApiRenderer] is wrapped in [cached] so the rendered OpenAPI document is memoized across
+ * requests to `/openapi-schema.json`.
  *
  * Usage:
  * ```kotlin
@@ -40,14 +46,16 @@ fun <NODE : Any> openApi3WithKotlinx(
     securityRenderer: SecurityRenderer = OpenApi3SecurityRenderer,
     errorResponseRenderer: ErrorResponseRenderer = JsonErrorResponseRenderer(json),
     version: OpenApiVersion = OpenApiVersion._3_1_0,
-): OpenApi3<NODE> =
-    OpenApi3(
-        apiInfo = apiInfo,
-        json = json,
-        extensions = extensions,
-        apiRenderer = KotlinxOpenApi3Renderer(json, schema),
-        securityRenderer = securityRenderer,
-        errorResponseRenderer = errorResponseRenderer,
-        servers = servers,
-        version = version,
-    )
+): OpenApi3<NODE> {
+  val renderer: ApiRenderer<Api<NODE>, NODE> = KotlinxOpenApi3Renderer(json, schema).cached()
+  return OpenApi3(
+      apiInfo = apiInfo,
+      json = json,
+      extensions = extensions,
+      apiRenderer = renderer,
+      securityRenderer = securityRenderer,
+      errorResponseRenderer = errorResponseRenderer,
+      servers = servers,
+      version = version,
+  )
+}
