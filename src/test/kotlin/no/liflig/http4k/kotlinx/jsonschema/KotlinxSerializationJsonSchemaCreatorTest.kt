@@ -1,5 +1,6 @@
 package no.liflig.http4k.kotlinx.jsonschema
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.maps.shouldBeEmpty
@@ -810,5 +811,104 @@ class KotlinxSerializationJsonSchemaCreatorTest {
 
     schema.definitions shouldContainKey "RenamedSubclass"
     schema.definitions shouldNotContainKey "SealedChild1"
+  }
+
+  // --- H3 regression: SerializationException for unregistered classes must propagate ---
+
+  @Test
+  fun `propagates SerializationException for non-Serializable classes`() {
+    shouldThrow<kotlinx.serialization.SerializationException> {
+      schemaCreator.toSchema(UnregisteredDto("oops"))
+    }
+  }
+
+  @Test
+  fun `returns empty schema for anonymous-object sentinel from exampleSchemaIsValid`() {
+    val schema = schemaCreator.toSchema(object {})
+    schema.definitions.shouldBeEmpty()
+    (schema.node as JsonObject).keys.shouldBeEmpty()
+  }
+
+  // --- H2 regression: overrideDefinitionId on recursive DTOs rewrites inner self-refs ---
+
+  @Test
+  fun `overrideDefinitionId rewrites recursive self-refs to the new name`() {
+    val schema = schemaCreator.toSchema(RecursiveDto.example, overrideDefinitionId = "MyRecursive")
+
+    schema.definitions shouldContainKey "MyRecursive"
+    schema.definitions shouldNotContainKey "RecursiveDto"
+
+    val definition = schema.definitions["MyRecursive"]!!
+    val defAsString =
+        kotlinx.serialization.json.Json.encodeToString(JsonElement.serializer(), definition)
+    defAsString shouldNotContain "RecursiveDto"
+    defAsString shouldContain "#/components/schemas/MyRecursive"
+  }
+
+  // --- H1 regression: short-name collisions don't leave dangling $refs ---
+
+  @Test
+  fun `short-name collision across packages produces valid refs in both directions`() {
+    val schema = schemaCreator.toSchema(TwoUsersDto.example)
+
+    // Both definitions exist under disambiguated keys; the bare "User" key must not exist.
+    schema.definitions shouldContainKey "packageA_User"
+    schema.definitions shouldContainKey "packageB_User"
+    schema.definitions shouldNotContainKey "User"
+
+    val def = schema.definitions["TwoUsersDto"]!!
+    val asString = kotlinx.serialization.json.Json.encodeToString(JsonElement.serializer(), def)
+    asString shouldContain "#/components/schemas/packageA_User"
+    asString shouldContain "#/components/schemas/packageB_User"
+    asString shouldNotContain "\"#/components/schemas/User\""
+  }
+
+  // --- M2 regression: two sealed hierarchies with same-named subclasses each get a definition ---
+
+  @Test
+  fun `two sealed hierarchies with overlapping subclass names produce distinct definitions`() {
+    val schema = schemaCreator.toSchema(TwoSealedEventsDto.example)
+
+    schema.definitions shouldContainKey "EventA"
+    schema.definitions shouldContainKey "EventB"
+
+    // The Created subclasses exist under disambiguated keys (collision resolution
+    // renames both because FQCNs differ).
+    schema.definitions shouldNotContainKey "Created"
+    val createdKeys = schema.definitions.keys.filter { it.endsWith("_Created") }
+    createdKeys.size shouldBe 2
+
+    // Neither parent's oneOf references the bare "Created" key.
+    val eventA = schema.definitions["EventA"]!!
+    val eventB = schema.definitions["EventB"]!!
+    val eventAStr = kotlinx.serialization.json.Json.encodeToString(JsonElement.serializer(), eventA)
+    val eventBStr = kotlinx.serialization.json.Json.encodeToString(JsonElement.serializer(), eventB)
+    eventAStr shouldNotContain "\"#/components/schemas/Created\""
+    eventBStr shouldNotContain "\"#/components/schemas/Created\""
+
+    // The two Created definitions document different properties (proves both are real).
+    val def0 = schema.definitions[createdKeys[0]] as JsonObject
+    val def1 = schema.definitions[createdKeys[1]] as JsonObject
+    (def0 == def1) shouldBe false
+  }
+
+  // --- M3 regression: @JsonClassDiscriminator override is honoured ---
+
+  @Test
+  fun `JsonClassDiscriminator override is used instead of the global discriminator`() {
+    val schema = schemaCreator.toSchema(CustomDiscriminatorContainerDto.example)
+
+    val parent = schema.definitions["CustomDiscriminatorEvent"]!! as JsonObject
+    val discriminator = parent["discriminator"] as JsonObject
+    (discriminator["propertyName"] as JsonPrimitive).content shouldBe "kind"
+
+    // Each subclass embeds the discriminator property as "kind", not the global "type".
+    val subclass =
+        schema.definitions.values.filterIsInstance<JsonObject>().first {
+          (it["properties"] as? JsonObject)?.containsKey("kind") == true
+        }
+    val properties = subclass["properties"] as JsonObject
+    properties shouldContainKey "kind"
+    properties shouldNotContainKey "type"
   }
 }

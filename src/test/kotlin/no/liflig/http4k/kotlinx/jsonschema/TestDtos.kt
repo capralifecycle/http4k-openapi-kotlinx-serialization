@@ -545,3 +545,98 @@ data class ByteShortCharDto(
     val example = ByteShortCharDto(127, 32000, 'A')
   }
 }
+
+// --- Non-@Serializable class for H3 regression: real SerializationException must propagate ---
+
+class UnregisteredDto(val name: String)
+
+// --- Cross-package short-name collision for H1 regression ---
+
+@Serializable
+@SerialName("packageA.User")
+data class PackageAUser(val name: String) {
+  companion object {
+    val example = PackageAUser("alice")
+  }
+}
+
+@Serializable
+@SerialName("packageB.User")
+data class PackageBUser(val email: String) {
+  companion object {
+    val example = PackageBUser("bob@example.com")
+  }
+}
+
+@Serializable
+data class TwoUsersDto(
+    val a: PackageAUser,
+    val b: PackageBUser,
+) {
+  companion object {
+    val example = TwoUsersDto(PackageAUser.example, PackageBUser.example)
+  }
+}
+
+// --- M2: two sealed hierarchies whose subclasses share simple name + @SerialName ---
+
+@Serializable
+sealed class EventA {
+  @Serializable
+  @SerialName("created")
+  data class Created(val name: String) : EventA() {
+    companion object {
+      val example = Created("alice")
+    }
+  }
+}
+
+@Serializable
+sealed class EventB {
+  @Serializable
+  @SerialName("created")
+  data class Created(val count: Int) : EventB() {
+    companion object {
+      val example = Created(42)
+    }
+  }
+}
+
+@Serializable
+data class TwoSealedEventsDto(
+    val a: EventA,
+    val b: EventB,
+) {
+  companion object {
+    val example = TwoSealedEventsDto(EventA.Created.example, EventB.Created.example)
+  }
+}
+
+// --- M3: sealed hierarchy with @JsonClassDiscriminator override ---
+
+@Serializable
+@kotlinx.serialization.json.JsonClassDiscriminator("kind")
+sealed class CustomDiscriminatorEvent {
+  @Serializable
+  @SerialName("kicked_off")
+  data class KickedOff(val by: String) : CustomDiscriminatorEvent() {
+    companion object {
+      val example = KickedOff("alice")
+    }
+  }
+
+  @Serializable
+  @SerialName("finished")
+  data class Finished(val outcome: String) : CustomDiscriminatorEvent() {
+    companion object {
+      val example = Finished("ok")
+    }
+  }
+}
+
+@Serializable
+data class CustomDiscriminatorContainerDto(val event: CustomDiscriminatorEvent) {
+  companion object {
+    val example = CustomDiscriminatorContainerDto(CustomDiscriminatorEvent.KickedOff.example)
+  }
+}

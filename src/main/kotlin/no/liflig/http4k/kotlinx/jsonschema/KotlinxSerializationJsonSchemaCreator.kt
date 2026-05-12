@@ -15,6 +15,7 @@ import kotlinx.serialization.serializer
 import org.http4k.contract.jsonschema.JsonSchema
 import org.http4k.contract.jsonschema.JsonSchemaCreator
 import org.http4k.format.AutoMarshallingJson
+import org.http4k.format.JsonType
 
 @OptIn(ExperimentalSerializationApi::class)
 class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
@@ -43,6 +44,13 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
   private class DefinitionAccumulator<NODE>(
       val schemas: MutableMap<String, NODE> = mutableMapOf(),
       val serialNames: MutableMap<String, String> = mutableMapOf(),
+      /**
+       * Tracks definitions that were renamed mid-walk due to short-name collisions. Maps the
+       * *original* definition key (what already-emitted refs are pointing at) to the *new* key.
+       * Applied as a post-walk sweep in [toSchema] so stale `$ref`s are rewritten consistently
+       * across [schemas] and the root node.
+       */
+      val collisionRenames: MutableMap<String, String> = mutableMapOf(),
   )
 
   override fun toSchema(
@@ -53,10 +61,14 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
     val (serializer, jsonElement) =
         try {
           resolveSerializerAndEncode(obj)
-        } catch (_: kotlinx.serialization.SerializationException) {
+        } catch (e: kotlinx.serialization.SerializationException) {
           // http4k passes `object {}` as a sentinel value in exampleSchemaIsValid.
-          // Return an empty schema so the comparison works correctly.
-          return JsonSchema(json.obj(), emptyMap())
+          // Only swallow that case; real serializer-registration failures must propagate
+          // so missing or broken `@Serializable` DTOs surface at OpenAPI-build time.
+          if (obj::class.java.isAnonymousClass) {
+            return JsonSchema(json.obj(), emptyMap())
+          }
+          throw e
         }
     val descriptor = serializer.descriptor
 
@@ -70,7 +82,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
           null
         }
 
-    val node =
+    val rawNode =
         descriptorToSchema(
             descriptor = descriptor,
             jsonElement = jsonElement,
@@ -80,12 +92,48 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
             kType = rootKType,
         )
 
+    // Apply any pending collision renames recorded mid-walk: a `$ref` to a key that
+    // was renamed during a later collision must now point at the new key. Without
+    // this sweep, refs emitted before the collision would be dangling.
+    val node = applyCollisionRenames(rawNode, defs)
+
     if (overrideDefinitionId != null) {
       return applyOverrideDefinitionId(node, defs, overrideDefinitionId, refModelNamePrefix)
     }
 
     return JsonSchema(node, defs.schemas)
   }
+
+  private fun applyCollisionRenames(node: NODE, defs: DefinitionAccumulator<NODE>): NODE {
+    if (defs.collisionRenames.isEmpty()) return node
+    val pathRenames =
+        defs.collisionRenames.entries.associate { (oldKey, newKey) ->
+          "#/$refLocationPrefix/$oldKey" to "#/$refLocationPrefix/$newKey"
+        }
+    val rewrittenDefs = defs.schemas.mapValues { (_, v) -> rewriteRefPaths(v, pathRenames) }
+    defs.schemas.clear()
+    defs.schemas.putAll(rewrittenDefs)
+    defs.collisionRenames.clear()
+    return rewriteRefPaths(node, pathRenames)
+  }
+
+  /**
+   * Recursively walks [node] and rewrites every string whose content exactly matches one of the old
+   * paths in [pathRenames] to the corresponding new path. Covers both `$ref` values and OpenAPI
+   * `discriminator.mapping` values (which are paths under arbitrary keys, not under `$ref`).
+   * Exact-match-only, so an unrelated description string can't be rewritten by accident.
+   */
+  private fun rewriteRefPaths(node: NODE, pathRenames: Map<String, String>): NODE =
+      when (json.typeOf(node)) {
+        JsonType.Object ->
+            json.obj(json.fields(node).map { (k, v) -> k to rewriteRefPaths(v, pathRenames) })
+        JsonType.Array -> json.array(json.elements(node).map { rewriteRefPaths(it, pathRenames) })
+        JsonType.String -> {
+          val text = json.text(node)
+          if (pathRenames.containsKey(text)) json.string(pathRenames.getValue(text)) else node
+        }
+        else -> node
+      }
 
   private fun applyOverrideDefinitionId(
       node: NODE,
@@ -103,17 +151,25 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
     val originalDefKey = originalRefPath.removePrefix("#/$refLocationPrefix/")
     val newDefKey = (refModelNamePrefix ?: "") + overrideDefinitionId
 
-    if (originalDefKey != newDefKey) {
-      val defValue = defs.schemas.remove(originalDefKey)
-      if (defValue != null) {
-        defs.schemas[newDefKey] = defValue
-      }
-      defs.serialNames.remove(originalDefKey)
-      val newRefPath = "#/$refLocationPrefix/$newDefKey"
-      return JsonSchema(json.obj("\$ref" to json.string(newRefPath)), defs.schemas)
+    if (originalDefKey == newDefKey) {
+      return JsonSchema(node, defs.schemas)
     }
 
-    return JsonSchema(node, defs.schemas)
+    val newRefPath = "#/$refLocationPrefix/$newDefKey"
+    val pathRenames = mapOf(originalRefPath to newRefPath)
+
+    // Move the renamed definition under the new key, then rewrite every inner $ref
+    // so recursive self-references and cross-definition refs stay consistent.
+    val moved = defs.schemas.remove(originalDefKey)
+    defs.serialNames.remove(originalDefKey)
+    val rewrittenDefs = defs.schemas.mapValues { (_, v) -> rewriteRefPaths(v, pathRenames) }
+    defs.schemas.clear()
+    defs.schemas.putAll(rewrittenDefs)
+    if (moved != null) {
+      defs.schemas[newDefKey] = rewriteRefPaths(moved, pathRenames)
+    }
+
+    return JsonSchema(json.obj("\$ref" to json.string(newRefPath)), defs.schemas)
   }
 
   @Suppress("UNCHECKED_CAST")
@@ -466,6 +522,11 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
         defs.schemas[oldPrefixedName] = existing
         defs.serialNames.remove(existingKey)
         defs.serialNames[oldPrefixedName] = existingSerialName ?: existingKey
+        // Record the rename so any `$ref` emitted earlier (pointing at existingKey)
+        // can be rewritten to oldPrefixedName by the post-walk sweep in toSchema.
+        if (existingKey != oldPrefixedName) {
+          defs.collisionRenames[existingKey] = oldPrefixedName
+        }
 
         val newFullName = serialName.replace('.', '_')
         val newPrefixedName = refModelNamePrefix?.let { "$it$newFullName" } ?: newFullName
@@ -550,12 +611,15 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
       "Unexpected SEALED descriptor structure: elementsCount=${descriptor.elementsCount}"
     }
 
-    val classDiscriminator = kotlinxJson.configuration.classDiscriminator
-
-    val discriminatorName = descriptor.getElementName(0)
-    require(discriminatorName == classDiscriminator) {
-      "Unexpected SEALED descriptor structure: element[0].name=${discriminatorName}, expected=$classDiscriminator"
-    }
+    // Discriminator name: prefer @JsonClassDiscriminator on the sealed parent (which the
+    // JSON encoder uses at runtime), fall back to the global Json.classDiscriminator config.
+    // Reading descriptor.getElementName(0) would always return the SealedClassSerializer's
+    // generator default ("type") and miss per-hierarchy overrides.
+    val classDiscriminator =
+        descriptor.annotations
+            .filterIsInstance<kotlinx.serialization.json.JsonClassDiscriminator>()
+            .firstOrNull()
+            ?.discriminator ?: kotlinxJson.configuration.classDiscriminator
 
     val subclassContainerDescriptor = descriptor.getElementDescriptor(1)
 
@@ -644,10 +708,17 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
 
       val subclassSchema = json.obj(schemaFields)
 
+      // Use the subclass's qualified class name (not the @SerialName discriminator value)
+      // as the identity passed to addDefinition. The discriminator value can be reused
+      // across sealed hierarchies (e.g. two unrelated trees both with a `@SerialName("created")`
+      // subclass); FQCN keeps them distinct and lets collision resolution rename when
+      // their simple names also collide.
+      val subclassIdentity =
+          subclassKClasses[discriminatorValue]?.qualifiedName ?: discriminatorValue
       val subclassDefName =
           addDefinition(
               defs = defs,
-              serialName = discriminatorValue,
+              serialName = subclassIdentity,
               shortName = shortName,
               schema = { subclassSchema },
               refModelNamePrefix = refModelNamePrefix,
