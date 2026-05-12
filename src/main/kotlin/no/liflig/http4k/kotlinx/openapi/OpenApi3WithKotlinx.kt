@@ -24,7 +24,11 @@ import org.http4k.format.Json
  * schema creator (defaults to [NullableStrategy.TYPE_ARRAY] for code generator compatibility).
  *
  * The [ApiRenderer] is wrapped in [cached] so the rendered OpenAPI document is memoized across
- * requests to `/openapi-schema.json`.
+ * requests to `/openapi-schema.json`. This assumes the set of contract routes is **static** — built
+ * once at startup and not mutated per-request. If a service needs dynamic contracts (e.g.
+ * per-tenant routes registered after startup, feature-flag-toggled endpoints) the cached document
+ * will serve the first-rendered snapshot indefinitely; construct [KotlinxOpenApi3Renderer] and pass
+ * it to [OpenApi3] manually without `.cached()` in that case.
  *
  * Usage:
  * ```kotlin

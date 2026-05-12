@@ -227,7 +227,9 @@ val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
 
 **Trade-off with `TYPE_ARRAY`**: For nullable `$ref` types (objects, enums, sealed classes), there is no `type` array equivalent. Instead, the `$ref` is emitted without a nullable wrapper, and the field is excluded from `required`. This means strict JSON Schema validators won't know the field accepts `null` (only that it's optional). In practice, TypeScript consumers treat optional and nullable identically (`field?: Type`), so this is acceptable for code generation use cases.
 
-Use `ANYOF` if your schema consumers are strict validators that need to distinguish "field absent" from "field present with value null":
+**Limitation — nullable `$ref` inside collections**: `TYPE_ARRAY` only suppresses nullability for `$ref` types at the field level (where excluding from `required` makes the field optional). For `$ref` types inside collection elements — `List<Child?>`, `Map<String, Child?>`, `Set<Child?>` — there is no field-level `required` to elide; the element schema is just a `$ref` and the rendered schema documents elements that don't accept `null`. If a DTO uses nullable refs inside collections AND consumers need to distinguish missing from null at the element level, switch to `ANYOF`.
+
+Use `ANYOF` if your schema consumers are strict validators that need to distinguish "field absent" from "field present with value null", or if you have nullable refs inside collection elements:
 
 ```kotlin
 val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
