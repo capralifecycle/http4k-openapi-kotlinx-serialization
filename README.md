@@ -55,11 +55,11 @@ For each descriptor element at index `i`, look up `descriptor.getElementName(i)`
 
 ### Generic Type Erasure
 
-We obtain `SerialDescriptor` via `kotlinxJson.serializersModule.serializer(obj::class.java)`. Generic type information is erased.
+We obtain `SerialDescriptor` via `kotlinxJson.serializersModule.serializer(obj::class.java)`. Generic type information is erased at this entry point.
 
-**Why acceptable**: `toSchema` receives concrete `@Serializable` wrapper DTOs from http4k contract routes. These are always concrete types, not generic List<T> or Map<K,V> in the abstract.
+**Why acceptable**: `toSchema` receives concrete `@Serializable` wrapper DTOs from http4k contract routes. These are always concrete types, not generic List<T> or Map<K,V> in the abstract. Inside the descriptor walk, generic argument types and inline value-class inner types are recovered by threading a `KType` through traversal, so collection element types and inline-class wrappers resolve correctly even though the top-level entry point can't see them.
 
-**Edge case**: If a serializer is not registered in `serializersModule`, kotlinx.serialization throws `SerializationException`. We propagate this as-is (fail-fast).
+**`object {}` sentinel**: http4k calls `toSchema(object {})` from `exampleSchemaIsValid` to probe the comparator path. Resolving a serializer for an anonymous object throws `SerializationException`; we catch it and return an empty `JsonSchema` so the comparison succeeds. All other unregistered-serializer cases propagate the exception as-is (fail-fast).
 
 ### @Transient Fields
 
@@ -236,6 +236,48 @@ val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
     nullableStrategy = NullableStrategy.ANYOF,
 )
 ```
+
+### Required fields and default values
+
+A field is added to the OpenAPI `required` array based on kotlinx.serialization's `descriptor.isElementOptional(i)`, **not** Kotlin's notion of nullability. The rule:
+
+- **No default value** → required (regardless of nullability).
+- **Has a Kotlin default value** (e.g. `val x: String = "..."`) → optional. The compiler plugin marks it `isElementOptional = true`, so kotlinx can deserialize JSON that omits the field.
+- **Has a default value AND is annotated with `@Required`** → required again. Use this when the default is a fallback for in-process construction but the JSON wire format must always include the field.
+
+```kotlin
+@Serializable
+data class CreateOrderRequest(
+    val customerId: UUID,                  // required (no default)
+    val notes: String? = null,             // optional (has default)
+    @Required val source: String = "web",  // required (default + @Required)
+)
+```
+
+Nullable fields without a default are still required — they just accept `null` as a value (see [Nullable strategy](#nullable-strategy) for how that's encoded).
+
+### Inline value classes
+
+Kotlinx-serialization's compiler plugin generates a `descriptor.isInline = true` descriptor for `@JvmInline value class X(val value: Y)`. The schema creator unwraps these: the schema for `X` is the schema for `Y`. This matters for Liflig services that use inline value classes for type-safe IDs:
+
+```kotlin
+@JvmInline value class UserId(override val value: UUID) : UuidEntityId
+@Serializable data class User(val id: UserId, val name: String)
+```
+
+`User.id` appears in the schema as `{"type": "string", "format": "uuid"}` (assuming `formatMappings` includes `UUID`), not as a wrapping object. Definition names also don't gain a `UserId` indirection.
+
+### Supported map types
+
+The map key serializer must have `kind = PrimitiveKind.STRING`. What this means in practice:
+
+- `Map<String, T>` works.
+- `Map<UUID, T>` works (the standard kotlinx UUID serializer has `PrimitiveKind.STRING`). Any custom serializer that writes its value as a JSON string is also fine — what matters is the descriptor's `kind`, not the underlying Kotlin type.
+- `Map<EnumX, T>` throws (enum key descriptor has `SerialKind.ENUM`).
+- `Map<Int, T>` and other non-string primitives throw (`PrimitiveKind.INT`, etc.).
+- `Map<UserId, T>` where `UserId` is an inline `@JvmInline value class` throws — the inline descriptor has `StructureKind.CLASS`, even though the runtime representation is a string. Inline value classes are unwrapped in property positions (see above), but the map-key check looks at the declared descriptor kind, not the unwrapped type.
+
+For maps with enum or inline-value-class keys, serialize them as `List<{key, value}>` records, or use kotlinx-serialization's `MapAsArraySerializer` for the wire format.
 
 ### `overrideDefinitionId`
 
