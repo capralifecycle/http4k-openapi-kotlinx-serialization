@@ -70,8 +70,7 @@ data class OptionalFieldDto(
     val required: String,
     val withDefault: String = "default-value",
     val withDefaultInt: Int = 42,
-    @Required
-    val requiredWithDefault: String = "required-default-value",
+    @Required val requiredWithDefault: String = "required-default-value",
 ) {
   companion object {
     val example = OptionalFieldDto("hello")

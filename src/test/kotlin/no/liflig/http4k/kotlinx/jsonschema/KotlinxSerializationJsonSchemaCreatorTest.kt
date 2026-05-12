@@ -10,7 +10,6 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.types.shouldBeInstanceOf
-import javax.validation.constraints.Null
 import kotlinx.serialization.json.Json as KotlinxJson
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
