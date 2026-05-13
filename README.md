@@ -110,13 +110,20 @@ The `openApi3WithKotlinx` helper wires everything needed for Jackson-free OpenAP
 By default, nullable fields use `type` arrays (`{"type": ["string", "null"]}`) for primitives and plain `$ref` for reference types. This ensures compatibility with widely used code generators like `openapi-generator-cli`. See [Nullable strategy](#nullable-strategy) for details and alternatives.
 
 ```kotlin
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import no.liflig.http4k.kotlinx.jsonschema.KotlinxSerializationJsonSchemaCreator
 import no.liflig.http4k.kotlinx.openapi.openApi3WithKotlinx
 import org.http4k.contract.contract
 import org.http4k.contract.openapi.ApiInfo
 import org.http4k.format.KotlinxSerialization
 
-val kotlinxJson = Json { ignoreUnknownKeys = true }
+// Pass the same Json instance your service uses elsewhere so the
+// serializersModule (contextual serializers, polymorphic registrations) and
+// any classDiscriminator override match between runtime encoding and schema
+// generation. Settings like ignoreUnknownKeys or prettyPrint do not affect
+// schema output.
+val kotlinxJson = Json { /* your service's existing config */ }
 
 val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
     json = KotlinxSerialization,
@@ -166,7 +173,7 @@ val routes = contract {
 }
 ```
 
-Passing `apiRenderer` as a named parameter forces Kotlin to use the `OpenApi3` primary constructor (which takes `Json<NODE>`), avoiding the secondary constructor that uses `ApiRenderer.Auto` (which would fail with KotlinxSerialization).
+Passing `apiRenderer` as a named parameter forces Kotlin to use the `OpenApi3` primary constructor (which takes `Json<NODE>`). The secondary constructor takes `AutoMarshallingJson<NODE>` and has no `apiRenderer` parameter — it always uses `ApiRenderer.Auto`, which falls back to Jackson and defeats the point of this library.
 
 The renderer's `toSchema()` fallback chain mirrors `ApiRenderer.Auto`:
 1. Raw JSON bodies (`json.body().toLens()` with NODE examples) are handled via `JsonToJsonSchema`
