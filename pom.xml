@@ -7,7 +7,7 @@
   <parent>
     <groupId>no.liflig</groupId>
     <artifactId>kotlin-parent</artifactId>
-    <version>3.20260425.153213</version>
+    <version>3.20260804.034823</version>
   </parent>
 
   <groupId>no.liflig</groupId>
@@ -18,9 +18,9 @@
     <major-version>1</major-version>
     <revision>${major-version}.local-SNAPSHOT</revision>
     <java.version>21</java.version>
-    <http4k.version>6.46.1.0</http4k.version>
+    <http4k.version>6.57.1.0</http4k.version>
     <kotlinx-serialization.version>1.11.0</kotlinx-serialization.version>
-    <kotest.version>6.1.11</kotest.version>
+    <kotest.version>6.2.3</kotest.version>
   </properties>
 
   <dependencyManagement>
@@ -35,7 +35,7 @@
       <dependency>
         <groupId>org.junit</groupId>
         <artifactId>junit-bom</artifactId>
-        <version>6.0.2</version>
+        <version>6.1.2</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -91,7 +91,7 @@
     <dependency>
       <groupId>io.swagger.parser.v3</groupId>
       <artifactId>swagger-parser</artifactId>
-      <version>2.1.42</version>
+      <version>2.1.46</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
