@@ -227,14 +227,14 @@ val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
 
 | Strategy | Nullable primitives | Nullable `$ref` types | Best for |
 |---|---|---|---|
-| `TYPE_ARRAY` (default) | `{"type": ["string", "null"]}` | Plain `{"$ref": "..."}` (field excluded from `required`) | Code generators (openapi-generator-cli, openapi-typescript, etc.) |
+| `TYPE_ARRAY` (default) | `{"type": ["string", "null"]}` | Plain `{"$ref": "..."}` (nullability not expressed) | Code generators (openapi-generator-cli, openapi-typescript, etc.) |
 | `ANYOF` | `{"anyOf": [{"type": "string"}, {"type": "null"}]}` | `{"anyOf": [{"$ref": "..."}, {"type": "null"}]}` | Strict JSON Schema validators that distinguish "absent" from "null" |
 
 **Why `TYPE_ARRAY` is the default**: The `anyOf` pattern, while semantically precise per OpenAPI 3.1 / JSON Schema 2020-12, is not handled correctly by `openapi-generator-cli` (the most widely used TypeScript code generator). It generates empty wrapper interfaces instead of proper nullable types. The `type` array form is equally valid OpenAPI 3.1 and produces correct output from all major generators.
 
-**Trade-off with `TYPE_ARRAY`**: For nullable `$ref` types (objects, enums, sealed classes), there is no `type` array equivalent. Instead, the `$ref` is emitted without a nullable wrapper, and the field is excluded from `required`. This means strict JSON Schema validators won't know the field accepts `null` (only that it's optional). In practice, TypeScript consumers treat optional and nullable identically (`field?: Type`), so this is acceptable for code generation use cases.
+**Trade-off with `TYPE_ARRAY`**: For nullable `$ref` types (objects, enums, sealed classes), there is no `type` array to merge `"null"` into, so the `$ref` is emitted without a nullable wrapper and the schema says nothing about the field accepting `null`. If the field also has a Kotlin default it is absent from `required`, and TypeScript consumers — which treat optional and nullable identically (`field?: Type`) — end up with the right shape. If it has no default, it is still in `required` (see [Required fields and default values](#required-fields-and-default-values)) and the `null` case is not documented at all.
 
-**Limitation — nullable `$ref` inside collections**: `TYPE_ARRAY` only suppresses nullability for `$ref` types at the field level (where excluding from `required` makes the field optional). For `$ref` types inside collection elements — `List<Child?>`, `Map<String, Child?>`, `Set<Child?>` — there is no field-level `required` to elide; the element schema is just a `$ref` and the rendered schema documents elements that don't accept `null`. If a DTO uses nullable refs inside collections AND consumers need to distinguish missing from null at the element level, switch to `ANYOF`.
+**Limitation — nullable `$ref` inside collections**: at the field level, an optional field at least signals to a generator that the value may be absent. For `$ref` types inside collection elements — `List<Child?>`, `Map<String, Child?>`, `Set<Child?>` — there is no field-level `required` at all; the element schema is just a `$ref` and the rendered schema documents elements that don't accept `null`. If a DTO uses nullable refs inside collections AND consumers need to distinguish missing from null at the element level, switch to `ANYOF`.
 
 Use `ANYOF` if your schema consumers are strict validators that need to distinguish "field absent" from "field present with value null", or if you have nullable refs inside collection elements:
 
@@ -264,6 +264,29 @@ data class CreateOrderRequest(
 ```
 
 Nullable fields without a default are still required — they just accept `null` as a value (see [Nullable strategy](#nullable-strategy) for how that's encoded).
+
+### Deprecated properties
+
+A property annotated with Kotlin's `@Deprecated` is rendered with `"deprecated": true`. No configuration is needed, and no extra annotation: the standard `kotlin.Deprecated` you already use to warn callers in Kotlin is what drives it.
+
+```kotlin
+@Serializable
+data class JourneyDto(
+    @Deprecated("Use originPlc instead") val originStop: PrimaryLocationCode,
+    val originPlc: PrimaryLocationCode,
+)
+```
+
+```json
+{
+  "originStop": { "type": "string", "deprecated": true },
+  "originPlc": { "type": "string" }
+}
+```
+
+Properties without the annotation carry no `deprecated` key at all, rather than `"deprecated": false`. The marker is placed on the property's outer schema in every shape — alongside `type` for primitives, as a sibling of `$ref` for reference types (legal in OpenAPI 3.1 / JSON Schema 2020-12), and outside the branches under `NullableStrategy.ANYOF`.
+
+Only properties are marked. `@Deprecated` on a DTO class itself has no effect on the schema.
 
 ### Inline value classes
 

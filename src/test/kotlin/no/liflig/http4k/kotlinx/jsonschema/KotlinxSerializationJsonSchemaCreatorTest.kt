@@ -911,4 +911,74 @@ class KotlinxSerializationJsonSchemaCreatorTest {
     properties shouldContainKey "kind"
     properties shouldNotContainKey "type"
   }
+
+  @Test
+  fun `renders deprecated marker for properties annotated with Deprecated`() {
+    val schema = schemaCreator.toSchema(DeprecatedFieldDto.example)
+
+    val definition = schema.definitions["DeprecatedFieldDto"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+
+    val legacySchema = properties["legacy"] as JsonObject
+    (legacySchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+    (legacySchema["type"] as JsonPrimitive).content shouldBe "string"
+
+    // Non-annotated properties carry no marker at all, rather than "deprecated": false.
+    val replacementSchema = properties["replacement"] as JsonObject
+    replacementSchema shouldNotContainKey "deprecated"
+
+    // Composes with the nullable type array rather than replacing it.
+    val nullableSchema = properties["legacyNullable"] as JsonObject
+    (nullableSchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+    val nullableType = nullableSchema["type"] as JsonArray
+    nullableType.map { (it as JsonPrimitive).content } shouldBe listOf("string", "null")
+
+    // Sibling of $ref, which OpenAPI 3.1 / JSON Schema 2020-12 permits.
+    val innerSchema = properties["legacyInner"] as JsonObject
+    (innerSchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+    (innerSchema["\$ref"] as JsonPrimitive).content shouldContain "InnerDto"
+
+    // Resolved via @SerialName, since the serialized name differs from the Kotlin name.
+    val renamedSchema = properties["legacy_renamed"] as JsonObject
+    (renamedSchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+  }
+
+  @Test
+  fun `renders deprecated marker for elements of a collection passed to toSchema`() {
+    // The entry point erases the element type to a star projection, so no KType reaches the
+    // element descriptor and the owner class has to be recovered from its serialName.
+    val schema = schemaCreator.toSchema(listOf(DeprecatedFieldDto.example))
+
+    val definition = schema.definitions["DeprecatedFieldDto"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+
+    val legacySchema = properties["legacy"] as JsonObject
+    (legacySchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+
+    val replacementSchema = properties["replacement"] as JsonObject
+    replacementSchema shouldNotContainKey "deprecated"
+  }
+
+  @Test
+  fun `ANYOF strategy renders deprecated marker outside the anyOf branches`() {
+    val anyOfSchemaCreator =
+        KotlinxSerializationJsonSchemaCreator<JsonElement>(
+            json = KotlinxSerialization,
+            kotlinxJson = kotlinxJson,
+            nullableStrategy = NullableStrategy.ANYOF,
+        )
+    val schema = anyOfSchemaCreator.toSchema(DeprecatedFieldDto.example)
+
+    val definition = schema.definitions["DeprecatedFieldDto"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+
+    val nullableSchema = properties["legacyNullable"] as JsonObject
+    (nullableSchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+
+    val anyOfArray = nullableSchema["anyOf"] as JsonArray
+    anyOfArray.size shouldBe 2
+    for (branch in anyOfArray) {
+      (branch as JsonObject) shouldNotContainKey "deprecated"
+    }
+  }
 }

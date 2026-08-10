@@ -10,6 +10,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json as KotlinxJson
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -66,6 +67,14 @@ class KotlinxOpenApi3RendererTest {
   @Serializable
   data class EventResponse(
       val event: EventPayload,
+  )
+
+  @Suppress("DEPRECATION")
+  @Serializable
+  data class DeprecatedPropertyDto(
+      @Deprecated("Use replacement instead") val legacy: String,
+      val replacement: String,
+      @Deprecated("Use replacement instead") val legacyEvent: EventPayload,
   )
 
   enum class StatusFilter {
@@ -294,6 +303,47 @@ class KotlinxOpenApi3RendererTest {
     val optionalEvent = properties["optionalEvent"]?.jsonObject.shouldNotBeNull()
     optionalEvent["\$ref"]?.jsonPrimitive?.content.shouldNotBeNull()
     optionalEvent["anyOf"] shouldBe null
+  }
+
+  @Test
+  fun `deprecated properties survive rendering and validate as openapi 3_1`() {
+    val responseLens = Body.auto<DeprecatedPropertyDto>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/deprecated" meta
+              {
+                summary = "Deprecated properties"
+                returning(
+                    OK,
+                    responseLens to DeprecatedPropertyDto("old", "new", EventPayload.Created("x")),
+                )
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val response = app(Request(GET, "/"))
+    response.status.code shouldBe 200
+    val spec = KotlinxJson.parseToJsonElement(response.bodyString()).jsonObject
+
+    val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
+    val dto = schemas["DeprecatedPropertyDto"]?.jsonObject.shouldNotBeNull()
+    val properties = dto["properties"]?.jsonObject.shouldNotBeNull()
+
+    properties["legacy"]?.jsonObject?.get("deprecated")?.jsonPrimitive?.boolean shouldBe true
+    properties["replacement"]?.jsonObject?.get("deprecated") shouldBe null
+
+    // A $ref sibling must survive the null-stripping pass in KotlinxOpenApi3Renderer.api().
+    val legacyEvent = properties["legacyEvent"]?.jsonObject.shouldNotBeNull()
+    legacyEvent["deprecated"]?.jsonPrimitive?.boolean shouldBe true
+    legacyEvent["\$ref"]?.jsonPrimitive?.content.shouldNotBeNull()
+
+    val parseResult =
+        io.swagger.parser.OpenAPIParser().readContents(response.bodyString(), null, null)
+    parseResult.messages.orEmpty().shouldBeEmpty()
   }
 
   @Test

@@ -640,3 +640,26 @@ data class CustomDiscriminatorContainerDto(val event: CustomDiscriminatorEvent) 
     val example = CustomDiscriminatorContainerDto(CustomDiscriminatorEvent.KickedOff.example)
   }
 }
+
+// --- @Deprecated properties ---
+
+@Suppress("DEPRECATION")
+@Serializable
+data class DeprecatedFieldDto(
+    @Deprecated("Use replacement instead") val legacy: String,
+    val replacement: String,
+    @Deprecated("Use replacement instead") val legacyNullable: String?,
+    @Deprecated("Use replacementInner instead") val legacyInner: InnerDto,
+    @Deprecated("Use replacement instead") @SerialName("legacy_renamed") val legacyRenamed: String,
+) {
+  companion object {
+    val example =
+        DeprecatedFieldDto(
+            legacy = "old",
+            replacement = "new",
+            legacyNullable = "old-nullable",
+            legacyInner = InnerDto.example,
+            legacyRenamed = "old-renamed",
+        )
+  }
+}

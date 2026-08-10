@@ -1,6 +1,7 @@
 package no.liflig.http4k.kotlinx.jsonschema
 
 import kotlin.reflect.KClass
+import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.starProjectedType
@@ -455,7 +456,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
         val hasRef = fields.any { (k, _) -> k == "\$ref" }
 
         if (hasRef) {
-          // $ref types: return as-is (field already excluded from required)
+          // $ref types: return as-is — no "type" field exists to merge "null" into
           schema
         } else {
           // Primitive/inline types: merge "null" into type array
@@ -474,6 +475,17 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
       }
     }
   }
+
+  /**
+   * Appends `"deprecated": true` to an already-built property schema.
+   *
+   * Applied after [wrapNullable], so the marker lands on the outer object in every shape the walk
+   * produces: alongside `type` for primitives, as a sibling of `$ref` for reference types (which
+   * OpenAPI 3.1 / JSON Schema 2020-12 permits), and as a sibling of `anyOf` under
+   * [NullableStrategy.ANYOF] rather than inside one of its branches.
+   */
+  private fun withDeprecatedMarker(schema: NODE): NODE =
+      json.obj(json.fields(schema).toList() + ("deprecated" to json.boolean(true)))
 
   private fun convertJsonElement(element: JsonElement): NODE {
     return when (element) {
@@ -570,13 +582,13 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
   ): Pair<List<Pair<String, NODE>>, List<String>> {
     val properties = mutableListOf<Pair<String, NODE>>()
     val requiredFields = mutableListOf<String>()
-    val ownerKClass = kType?.classifier as? KClass<*>
+    val ownerKClass = (kType?.classifier as? KClass<*>) ?: loadKClass(descriptor.serialName)
 
     for (i in 0 until descriptor.elementsCount) {
       val elementName = descriptor.getElementName(i)
       val elementDescriptor = descriptor.getElementDescriptor(i)
       val elementJsonValue = jsonObj?.get(elementName)
-      val elementKType = resolvePropertyType(ownerKClass, elementName)
+      val property = resolveProperty(ownerKClass, elementName)
 
       val elementSchema =
           descriptorToSchema(
@@ -585,10 +597,13 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
               defs = defs,
               visited = visited,
               refModelNamePrefix = refModelNamePrefix,
-              kType = elementKType,
+              kType = property?.returnType,
           )
 
-      properties.add(elementName to elementSchema)
+      val isDeprecated = property?.annotations?.any { it is Deprecated } ?: false
+      properties.add(
+          elementName to if (isDeprecated) withDeprecatedMarker(elementSchema) else elementSchema
+      )
 
       val isOptional = descriptor.isElementOptional(i)
       if (!isOptional) {
@@ -762,21 +777,38 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
       }
 
   /**
-   * Resolves a property's [KType] by matching the serialized element name to a Kotlin property.
-   * Checks both the Kotlin property name and any `@SerialName` annotation on the property, since
-   * the serialized name may differ from the Kotlin name.
+   * Resolves the Kotlin property backing a serialized element name. Matches both the Kotlin
+   * property name and any `@SerialName` annotation on the property, since the serialized name may
+   * differ from the Kotlin name.
+   *
+   * The property carries two things the [SerialDescriptor] cannot: its [KType], used to thread
+   * generic type arguments through the walk, and its annotations, used to detect [Deprecated].
    */
-  private fun resolvePropertyType(ownerKClass: KClass<*>?, elementName: String): KType? {
-    if (ownerKClass == null) return null
-    return ownerKClass.memberProperties
-        .find { prop ->
-          prop.name == elementName ||
-              prop.annotations.filterIsInstance<kotlinx.serialization.SerialName>().any {
-                it.value == elementName
-              }
-        }
-        ?.returnType
-  }
+  private fun resolveProperty(ownerKClass: KClass<*>?, elementName: String): KProperty1<*, *>? =
+      ownerKClass?.memberProperties?.find { prop ->
+        prop.name == elementName ||
+            prop.annotations.filterIsInstance<kotlinx.serialization.SerialName>().any {
+              it.value == elementName
+            }
+      }
+
+  /**
+   * Loads the [KClass] named by a descriptor's `serialName`.
+   *
+   * Used as a fallback when no [KType] reached this point in the walk. The common case is a
+   * collection passed straight to [toSchema]: the entry point resolves the root type as
+   * `obj::class.starProjectedType`, whose argument is a star projection with a `null` type, so
+   * `List`/`Set`/`Map` handlers have nothing to thread to their elements.
+   *
+   * Returns `null` when the name is not a loadable class — a `@SerialName` alias, for instance — in
+   * which case the caller degrades to descriptor-only information.
+   */
+  private fun loadKClass(serialName: String): KClass<*>? =
+      try {
+        Class.forName(serialName.removeSuffix("?")).kotlin
+      } catch (_: ClassNotFoundException) {
+        null
+      }
 
   /** Resolves the inner type of an inline value class. */
   private fun resolveInlineInnerType(kType: KType?): KType? {
