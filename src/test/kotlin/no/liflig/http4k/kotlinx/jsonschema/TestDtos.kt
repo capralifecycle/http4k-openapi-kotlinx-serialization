@@ -641,6 +641,40 @@ data class CustomDiscriminatorContainerDto(val event: CustomDiscriminatorEvent) 
   }
 }
 
+// --- @get:Deprecated use-site target, and @Deprecated on a sealed subclass property ---
+
+@Serializable
+data class GetterDeprecatedDto(
+    @get:Deprecated("Use replacement instead") val legacy: String,
+    val replacement: String,
+) {
+  companion object {
+    val example = GetterDeprecatedDto("old", "new")
+  }
+}
+
+@Serializable
+sealed class DeprecatedSealedBase {
+  @Suppress("DEPRECATION")
+  @Serializable
+  @SerialName("deprecated_leaf")
+  data class DeprecatedLeaf(
+      @Deprecated("Use current instead") val legacy: String,
+      val current: String,
+  ) : DeprecatedSealedBase() {
+    companion object {
+      val example = DeprecatedLeaf("old", "new")
+    }
+  }
+}
+
+@Serializable
+data class DeprecatedSealedContainerDto(val payload: DeprecatedSealedBase) {
+  companion object {
+    val example = DeprecatedSealedContainerDto(DeprecatedSealedBase.DeprecatedLeaf.example)
+  }
+}
+
 // --- @SerialName aliasing another class's qualified name (known limitation) ---
 
 @Suppress("DEPRECATION")

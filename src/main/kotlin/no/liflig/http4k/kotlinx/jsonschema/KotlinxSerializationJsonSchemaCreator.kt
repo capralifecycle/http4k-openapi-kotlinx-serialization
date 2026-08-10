@@ -477,6 +477,15 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
   }
 
   /**
+   * True when [property] carries `@Deprecated`. Checks the getter's annotations as well as the
+   * property's own, since the `@get:Deprecated` use-site form lands on the getter — `Deprecated`
+   * permits `PROPERTY_GETTER` as a target.
+   */
+  private fun isDeprecated(property: KProperty1<*, *>?): Boolean =
+      property != null &&
+          (property.annotations + property.getter.annotations).any { it is Deprecated }
+
+  /**
    * Appends `"deprecated": true` to an already-built property schema.
    *
    * Applied after [wrapNullable], so the marker lands on the outer object in every shape the walk
@@ -600,9 +609,9 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
               kType = property?.returnType,
           )
 
-      val isDeprecated = property?.annotations?.any { it is Deprecated } ?: false
       properties.add(
-          elementName to if (isDeprecated) withDeprecatedMarker(elementSchema) else elementSchema
+          elementName to
+              if (isDeprecated(property)) withDeprecatedMarker(elementSchema) else elementSchema
       )
 
       val isOptional = descriptor.isElementOptional(i)
@@ -812,8 +821,14 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
    */
   private fun loadKClass(serialName: String): KClass<*>? =
       try {
-        Class.forName(serialName.removeSuffix("?")).kotlin
+        // initialize = false: this is a best-effort metadata lookup, and running a consumer's
+        // static initialisers as a side effect of rendering documentation is not worth the risk.
+        Class.forName(serialName.removeSuffix("?"), false, javaClass.classLoader).kotlin
       } catch (_: ClassNotFoundException) {
+        null
+      } catch (_: LinkageError) {
+        // A half-resolvable class is still just a failed lookup here — degrade to
+        // descriptor-only information rather than failing the whole document.
         null
       }
 

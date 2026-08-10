@@ -193,11 +193,17 @@ parses cleanly (no schema-validity bugs slip through).
   projection with a `null` `type` — so `listToSchema` has nothing to thread to its
   elements and `ownerKClass` in `buildObjectProperties` would be `null`. Anything that
   needs the Kotlin declaration rather than the descriptor (property annotations, inline
-  value class inner types) would silently degrade, and because definitions are cached by
-  `serialName`, whichever endpoint reaches a DTO *first* decides its rendering for the
-  whole document. `buildObjectProperties` therefore falls back to
-  `Class.forName(descriptor.serialName)` when no `KType` arrived. The fallback returns
-  `null` for `@SerialName` aliases, which are not loadable class names.
+  value class inner types) then silently degrades.
+
+  The effect is visible across routes, not just within one walk. `DefinitionAccumulator`
+  and `visited` are created per `toSchema` call, so each route builds its own definitions
+  independently; http4k concatenates all of them —
+  `Components(json.obj(pathDefs + webhookPathDefs), …)` in `OpenApi3` — and settles a
+  duplicate key by map-build order. A DTO reachable both directly *and* as a list element
+  therefore produced two different definitions, with route order picking the winner.
+  `buildObjectProperties` falls back to `Class.forName(descriptor.serialName)` when no
+  `KType` arrived, so both paths now render identically and the ordering stops mattering.
+  See `loadKClass` for the one case the fallback resolves wrongly.
 - **`null` description fields in OpenAPI.** http4k's `OpenApi3ApiRenderer` emits
   `"description": null` for unset descriptions, which trips strict OpenAPI parsers.
   `KotlinxOpenApi3Renderer.api()` recursively strips null object values from the

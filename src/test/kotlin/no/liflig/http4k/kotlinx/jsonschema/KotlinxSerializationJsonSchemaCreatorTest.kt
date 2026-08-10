@@ -960,6 +960,40 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
+  fun `renders deprecated marker for the get use-site target`() {
+    // @get:Deprecated lands on the getter, not the property, so property.annotations alone
+    // misses it.
+    val schema = schemaCreator.toSchema(GetterDeprecatedDto.example)
+
+    val definition = schema.definitions["GetterDeprecatedDto"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+
+    val legacySchema = properties["legacy"] as JsonObject
+    (legacySchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+
+    val replacementSchema = properties["replacement"] as JsonObject
+    replacementSchema shouldNotContainKey "deprecated"
+  }
+
+  @Test
+  fun `renders deprecated marker on sealed subclass properties`() {
+    val schema = schemaCreator.toSchema(DeprecatedSealedContainerDto.example)
+
+    val definition = schema.definitions["DeprecatedLeaf"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+
+    val legacySchema = properties["legacy"] as JsonObject
+    (legacySchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+
+    val currentSchema = properties["current"] as JsonObject
+    currentSchema shouldNotContainKey "deprecated"
+
+    // The synthesised discriminator property is untouched.
+    val discriminator = properties["type"] as JsonObject
+    discriminator shouldNotContainKey "deprecated"
+  }
+
+  @Test
   fun `serial name aliasing another class's qualified name reads that class's annotations`() {
     // Known limitation, asserted so it stays visible rather than lurking.
     //
