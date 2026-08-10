@@ -641,6 +641,20 @@ data class CustomDiscriminatorContainerDto(val event: CustomDiscriminatorEvent) 
   }
 }
 
+// --- @SerialName aliasing another class's qualified name (known limitation) ---
+
+@Suppress("DEPRECATION")
+@Serializable
+data class SerialNameDecoy(@Deprecated("Decoy is deprecated") val field: String)
+
+@Serializable
+@SerialName("no.liflig.http4k.kotlinx.jsonschema.SerialNameDecoy")
+data class AliasedToDecoyDto(val field: String) {
+  companion object {
+    val example = AliasedToDecoyDto("value")
+  }
+}
+
 // --- @Deprecated properties ---
 
 @Suppress("DEPRECATION")

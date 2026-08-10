@@ -800,8 +800,15 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
    * `obj::class.starProjectedType`, whose argument is a star projection with a `null` type, so
    * `List`/`Set`/`Map` handlers have nothing to thread to their elements.
    *
-   * Returns `null` when the name is not a loadable class — a `@SerialName` alias, for instance — in
-   * which case the caller degrades to descriptor-only information.
+   * Returns `null` when the name is not a loadable class, in which case the caller degrades to
+   * descriptor-only information. Most `@SerialName` values fall here.
+   *
+   * **Known limitation.** A `@SerialName` that *is* a loadable class name resolves — to that class,
+   * not to the one being rendered — so its property annotations are read instead. Nothing available
+   * here distinguishes the two: the alias is, by construction, the other class's serial name. This
+   * requires one `@Serializable` type to alias another's fully-qualified name, and such a pair
+   * already collides in [addDefinition], which keys definitions by serial name too. See
+   * `KotlinxSerializationJsonSchemaCreatorTest`.
    */
   private fun loadKClass(serialName: String): KClass<*>? =
       try {

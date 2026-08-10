@@ -960,6 +960,28 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
+  fun `serial name aliasing another class's qualified name reads that class's annotations`() {
+    // Known limitation, asserted so it stays visible rather than lurking.
+    //
+    // When no KType reaches an object descriptor — an element of a collection passed straight to
+    // toSchema — the owner class is recovered from descriptor.serialName. A @SerialName that is
+    // itself a loadable class name therefore resolves to *that* class, and its property
+    // annotations are read instead of the rendered class's.
+    //
+    // Nothing here can discriminate: the alias is, by construction, the decoy's serial name. Note
+    // the definition lands under "SerialNameDecoy" rather than "AliasedToDecoyDto" independently
+    // of any of this, since definition naming is keyed on serial name as well.
+    val schema = schemaCreator.toSchema(listOf(AliasedToDecoyDto.example))
+
+    val definition = schema.definitions["SerialNameDecoy"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+    val field = properties["field"] as JsonObject
+
+    // AliasedToDecoyDto.field carries no @Deprecated — the marker comes from SerialNameDecoy.
+    (field["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+  }
+
+  @Test
   fun `ANYOF strategy renders deprecated marker outside the anyOf branches`() {
     val anyOfSchemaCreator =
         KotlinxSerializationJsonSchemaCreator<JsonElement>(
