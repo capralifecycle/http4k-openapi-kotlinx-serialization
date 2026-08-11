@@ -994,25 +994,55 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
-  fun `serial name aliasing another class's qualified name reads that class's annotations`() {
-    // Known limitation, asserted so it stays visible rather than lurking.
+  fun `serial name aliasing another class's qualified name does not read that class's annotations`() {
+    // AliasedToDecoyDto's @SerialName is SerialNameDecoy's fully-qualified name, so resolving the
+    // owner class from serialName would read the decoy's annotations and mark a field that is not
+    // deprecated. The root KType carries the real element class, so the decoy is never consulted.
     //
-    // When no KType reaches an object descriptor — an element of a collection passed straight to
-    // toSchema — the owner class is recovered from descriptor.serialName. A @SerialName that is
-    // itself a loadable class name therefore resolves to *that* class, and its property
-    // annotations are read instead of the rendered class's.
-    //
-    // Nothing here can discriminate: the alias is, by construction, the decoy's serial name. Note
-    // the definition lands under "SerialNameDecoy" rather than "AliasedToDecoyDto" independently
-    // of any of this, since definition naming is keyed on serial name as well.
+    // The definition still lands under "SerialNameDecoy" rather than "AliasedToDecoyDto",
+    // independently of any of this, since definition naming is keyed on serial name as well.
     val schema = schemaCreator.toSchema(listOf(AliasedToDecoyDto.example))
 
     val definition = schema.definitions["SerialNameDecoy"] as JsonObject
     val properties = definition["properties"] as JsonObject
     val field = properties["field"] as JsonObject
 
-    // AliasedToDecoyDto.field carries no @Deprecated — the marker comes from SerialNameDecoy.
-    (field["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+    field shouldNotContainKey "deprecated"
+  }
+
+  @Test
+  fun `renders deprecated marker for a class-level SerialName in a top-level list`() {
+    // A class-level @SerialName is not a loadable class name, so the serialName fallback cannot
+    // recover the owner class. The root KType has to carry the element type instead.
+    val schema = schemaCreator.toSchema(listOf(RenamedDeprecatedDto.example))
+
+    val definition = schema.definitions["renamed_item"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+
+    val legacySchema = properties["legacy"] as JsonObject
+    (legacySchema["deprecated"] as JsonPrimitive).content.toBoolean() shouldBe true
+  }
+
+  @Test
+  fun `marks deprecated whether a dto is reached directly or as a list element`() {
+    // Route order decides which definition wins when http4k merges components, so the two paths
+    // have to agree. The nested path threads List<RenamedDeprecatedDto> from the property's
+    // returnType; the top-level path builds its element type in resolveRootKType.
+    val nested = schemaCreator.toSchema(RenamedDeprecatedContainerDto.example)
+    val topLevel = schemaCreator.toSchema(listOf(RenamedDeprecatedDto.example))
+
+    val nestedLegacy = deprecatedFlagOfLegacy(nested.definitions["renamed_item"])
+    val topLevelLegacy = deprecatedFlagOfLegacy(topLevel.definitions["renamed_item"])
+
+    nestedLegacy shouldBe true
+    topLevelLegacy shouldBe true
+  }
+
+  /** Reads `properties.legacy.deprecated` out of a rendered definition. */
+  private fun deprecatedFlagOfLegacy(definition: JsonElement?): Boolean? {
+    val properties = (definition as JsonObject)["properties"] as JsonObject
+    val legacy = properties["legacy"] as JsonObject
+    return (legacy["deprecated"] as? JsonPrimitive)?.content?.toBoolean()
   }
 
   @Test

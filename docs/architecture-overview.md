@@ -188,22 +188,27 @@ parses cleanly (no schema-validity bugs slip through).
   `SerializationException` and we propagate it as-is (fail-fast).
 
   Contract routes **do** pass bare `List<T>` at the top level in practice (a list-returning
-  endpoint whose example is a `List<Dto>`). When they do, the root `KType` is
-  `obj::class.starProjectedType` — an `ArrayList<*>` whose single argument is a star
-  projection with a `null` `type` — so `listToSchema` has nothing to thread to its
-  elements and `ownerKClass` in `buildObjectProperties` would be `null`. Anything that
-  needs the Kotlin declaration rather than the descriptor (property annotations, inline
-  value class inner types) then silently degrades.
+  endpoint whose example is a `List<Dto>`). `obj::class.starProjectedType` is useless there —
+  it yields `ArrayList<*>`, whose single argument is a star projection with a `null` `type`,
+  so `listToSchema` would have nothing to thread to its elements and `ownerKClass` in
+  `buildObjectProperties` would be `null`. Anything needing the Kotlin declaration rather
+  than the descriptor (property annotations, inline value class inner types) then silently
+  degrades. `resolveRootKType` avoids that by building the root type from the first entry's
+  runtime class — the same source `resolveSerializerAndEncode` already uses for element
+  serializers.
 
-  The effect is visible across routes, not just within one walk. `DefinitionAccumulator`
-  and `visited` are created per `toSchema` call, so each route builds its own definitions
+  This matters across routes, not just within one walk. `DefinitionAccumulator` and
+  `visited` are created per `toSchema` call, so each route builds its own definitions
   independently; http4k concatenates all of them —
   `Components(json.obj(pathDefs + webhookPathDefs), …)` in `OpenApi3` — and settles a
   duplicate key by map-build order. A DTO reachable both directly *and* as a list element
-  therefore produced two different definitions, with route order picking the winner.
-  `buildObjectProperties` falls back to `Class.forName(descriptor.serialName)` when no
-  `KType` arrived, so both paths now render identically and the ordering stops mattering.
-  See `loadKClass` for the one case the fallback resolves wrongly.
+  would otherwise produce two different definitions, with route order picking the winner.
+  Both paths now start from a real element type, so they agree.
+
+  `buildObjectProperties` still falls back to `Class.forName(descriptor.serialName)` when no
+  `KType` arrived at all. After the above, that is a genuine last resort — a property whose
+  declared type is a generic type parameter — and it resolves nothing for a class-level
+  `@SerialName`. See `loadKClass` for the case it resolves wrongly.
 - **`null` description fields in OpenAPI.** http4k's `OpenApi3ApiRenderer` emits
   `"description": null` for unset descriptions, which trips strict OpenAPI parsers.
   `KotlinxOpenApi3Renderer.api()` recursively strips null object values from the

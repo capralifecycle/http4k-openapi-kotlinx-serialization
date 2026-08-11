@@ -3,6 +3,8 @@ package no.liflig.http4k.kotlinx.jsonschema
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
+import kotlin.reflect.KTypeProjection
+import kotlin.reflect.full.createType
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.starProjectedType
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -76,12 +78,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
     val defs = DefinitionAccumulator<NODE>()
     val visited = mutableSetOf<String>()
 
-    val rootKType =
-        try {
-          obj::class.starProjectedType
-        } catch (_: Exception) {
-          null
-        }
+    val rootKType = resolveRootKType(obj)
 
     val rawNode =
         descriptorToSchema(
@@ -172,6 +169,47 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
 
     return JsonSchema(json.obj("\$ref" to json.string(newRefPath)), defs.schemas)
   }
+
+  /**
+   * Resolves the [KType] for the root example object, to seed the walk's type threading.
+   *
+   * `obj::class.starProjectedType` alone is not enough for a top-level collection or map: the
+   * runtime class of `listOf(dto)` star-projects to `List<*>`, whose single argument has a `null`
+   * type, so [listToSchema] has nothing to thread to its elements. Everything downstream that needs
+   * the Kotlin declaration rather than the descriptor — property annotations such as [Deprecated],
+   * inline value class inner types — then degrades.
+   *
+   * Element types are recovered the same way [resolveSerializerAndEncode] recovers element
+   * serializers: from the runtime class of the first entry. The container classifier is synthetic
+   * ([List] / [Map]); only the type arguments are read downstream.
+   */
+  private fun resolveRootKType(obj: Any): KType? =
+      try {
+        when (obj) {
+          is Collection<*> ->
+              obj.firstOrNull()?.let { element ->
+                List::class.createType(
+                    listOf(KTypeProjection.invariant(element::class.starProjectedType))
+                )
+              }
+          is Map<*, *> ->
+              obj.entries.firstOrNull()?.let { (key, value) ->
+                if (key == null || value == null) {
+                  null
+                } else {
+                  Map::class.createType(
+                      listOf(
+                          KTypeProjection.invariant(key::class.starProjectedType),
+                          KTypeProjection.invariant(value::class.starProjectedType),
+                      )
+                  )
+                }
+              }
+          else -> obj::class.starProjectedType
+        }
+      } catch (_: Exception) {
+        null
+      }
 
   @Suppress("UNCHECKED_CAST")
   private fun resolveSerializerAndEncode(obj: Any): Pair<KSerializer<Any>, JsonElement> {
@@ -804,13 +842,14 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
   /**
    * Loads the [KClass] named by a descriptor's `serialName`.
    *
-   * Used as a fallback when no [KType] reached this point in the walk. The common case is a
-   * collection passed straight to [toSchema]: the entry point resolves the root type as
-   * `obj::class.starProjectedType`, whose argument is a star projection with a `null` type, so
-   * `List`/`Set`/`Map` handlers have nothing to thread to their elements.
+   * Last resort when no [KType] reached this point in the walk. [resolveRootKType] covers the
+   * collection-passed-straight-to-[toSchema] case and properties carry their own [KType], so what
+   * remains is a property whose declared type is a generic type parameter: the classifier is a
+   * `KTypeParameter` rather than a [KClass], and the concrete argument was erased upstream.
    *
    * Returns `null` when the name is not a loadable class, in which case the caller degrades to
-   * descriptor-only information. Most `@SerialName` values fall here.
+   * descriptor-only information — as it did everywhere before this fallback existed. Any
+   * class-level `@SerialName` falls here.
    *
    * **Known limitation.** A `@SerialName` that *is* a loadable class name resolves — to that class,
    * not to the one being rendered — so its property annotations are read instead. Nothing available

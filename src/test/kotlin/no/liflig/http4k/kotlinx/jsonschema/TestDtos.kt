@@ -689,6 +689,27 @@ data class AliasedToDecoyDto(val field: String) {
   }
 }
 
+// --- Class-level @SerialName that is not a loadable class name ---
+
+@Suppress("DEPRECATION")
+@Serializable
+@SerialName("renamed_item")
+data class RenamedDeprecatedDto(
+    @Deprecated("Use replacement instead") val legacy: String,
+    val replacement: String,
+) {
+  companion object {
+    val example = RenamedDeprecatedDto("old", "new")
+  }
+}
+
+@Serializable
+data class RenamedDeprecatedContainerDto(val items: List<RenamedDeprecatedDto>) {
+  companion object {
+    val example = RenamedDeprecatedContainerDto(listOf(RenamedDeprecatedDto.example))
+  }
+}
+
 // --- @Deprecated properties ---
 
 @Suppress("DEPRECATION")

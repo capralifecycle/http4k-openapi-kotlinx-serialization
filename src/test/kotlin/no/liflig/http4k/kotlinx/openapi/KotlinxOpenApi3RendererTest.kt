@@ -77,6 +77,15 @@ class KotlinxOpenApi3RendererTest {
       @Deprecated("Use replacement instead") val legacyEvent: EventPayload,
   )
 
+  @Suppress("DEPRECATION")
+  @Serializable
+  @SerialName("renamed_response")
+  data class RenamedResponseDto(
+      val id: String,
+      @Deprecated("Use code instead") val legacyCode: String,
+      val code: String,
+  )
+
   enum class StatusFilter {
     ACTIVE,
     INACTIVE,
@@ -344,6 +353,35 @@ class KotlinxOpenApi3RendererTest {
     val parseResult =
         io.swagger.parser.OpenAPIParser().readContents(response.bodyString(), null, null)
     parseResult.messages.orEmpty().shouldBeEmpty()
+  }
+
+  @Test
+  fun `list-returning route marks deprecated on a dto with a class-level SerialName`() {
+    val listLens = Body.auto<List<RenamedResponseDto>>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/items" meta
+              {
+                summary = "List items"
+                returning(
+                    OK,
+                    listLens to listOf(RenamedResponseDto("id-1", "old-code", "new-code")),
+                )
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val spec = fetchSpec(app)
+    val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
+    val dto = schemas["renamed_response"]?.jsonObject.shouldNotBeNull()
+    val properties = dto["properties"]?.jsonObject.shouldNotBeNull()
+
+    properties["legacyCode"]?.jsonObject?.get("deprecated")?.jsonPrimitive?.boolean shouldBe true
+    properties["code"]?.jsonObject?.get("deprecated") shouldBe null
   }
 
   @Test
