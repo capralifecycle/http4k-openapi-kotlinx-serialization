@@ -70,6 +70,9 @@ Five source files total:
       - Lists / Maps / Enums / Sealed classes → kind-specific node shape (`oneOf` +
         `discriminator` for sealed).
       - Nullables → applied by `NullableStrategy`.
+      - Properties annotated `@Deprecated` → `"deprecated": true` appended to the
+        finished property schema (after `NullableStrategy`, so it lands on the outer
+        object in every shape).
    3. Use the encoded `JsonElement` in parallel to extract example values by field name
       (descriptor gives structure, JSON tree gives values — reflection alone can't
       because of `@SerialName` invisibility).
@@ -168,14 +171,44 @@ parses cleanly (no schema-validity bugs slip through).
   kotlinx.serialization.** If a future version reshapes the descriptor, tests fail with
   a clear error (defensive validation in `KotlinxSerializationJsonSchemaCreator`). Read
   the thrown message before assuming a deeper bug.
+- **`@Deprecated` detection is reflection-based, and has to be.** This does not
+  contradict the first pitfall above, which is about *structure* — names, nullability,
+  polymorphism — all of which the descriptor owns. kotlinx.serialization only retains
+  annotations marked `@SerialInfo` in the generated descriptor, so
+  `getElementAnnotations(i)` never sees `kotlin.Deprecated`; reflection is the only
+  source. `buildObjectProperties` already resolves each element to its `KProperty` via
+  `resolveProperty` (to thread generic `KType`s), so the annotation check rides along on
+  a lookup that was happening anyway. Same rationale as
+  `SealedClassExampleProvider`'s `companion.example` discovery.
 - **`@Transient` fields disappear silently** — kotlinx.serialization's compiler plugin
   excludes them from both the descriptor and the encoded JSON. No special handling
   required; they simply don't appear in schemas.
 - **Generic type information is erased** at the entry point
-  (`serializer(obj::class.java)`). Acceptable because http4k contract routes pass
-  concrete wrapper DTOs, never bare `List<T>` / `Map<K,V>` at the top level. If a
-  serializer is not registered, kotlinx throws `SerializationException` and we propagate
-  it as-is (fail-fast).
+  (`serializer(obj::class.java)`). If a serializer is not registered, kotlinx throws
+  `SerializationException` and we propagate it as-is (fail-fast).
+
+  Contract routes **do** pass bare `List<T>` at the top level in practice (a list-returning
+  endpoint whose example is a `List<Dto>`). `obj::class.starProjectedType` is useless there —
+  it yields `ArrayList<*>`, whose single argument is a star projection with a `null` `type`,
+  so `listToSchema` would have nothing to thread to its elements and `ownerKClass` in
+  `buildObjectProperties` would be `null`. Anything needing the Kotlin declaration rather
+  than the descriptor (property annotations, inline value class inner types) then silently
+  degrades. `resolveRootKType` avoids that by building the root type from the first entry's
+  runtime class — the same source `resolveSerializerAndEncode` already uses for element
+  serializers.
+
+  This matters across routes, not just within one walk. `DefinitionAccumulator` and
+  `visited` are created per `toSchema` call, so each route builds its own definitions
+  independently; http4k concatenates all of them —
+  `Components(json.obj(pathDefs + webhookPathDefs), …)` in `OpenApi3` — and settles a
+  duplicate key by map-build order. A DTO reachable both directly *and* as a list element
+  would otherwise produce two different definitions, with route order picking the winner.
+  Both paths now start from a real element type, so they agree.
+
+  `buildObjectProperties` still falls back to `Class.forName(descriptor.serialName)` when no
+  `KType` arrived at all. After the above, that is a genuine last resort — a property whose
+  declared type is a generic type parameter — and it resolves nothing for a class-level
+  `@SerialName`. See `loadKClass` for the case it resolves wrongly.
 - **`null` description fields in OpenAPI.** http4k's `OpenApi3ApiRenderer` emits
   `"description": null` for unset descriptions, which trips strict OpenAPI parsers.
   `KotlinxOpenApi3Renderer.api()` recursively strips null object values from the

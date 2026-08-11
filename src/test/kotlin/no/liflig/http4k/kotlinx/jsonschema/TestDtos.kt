@@ -640,3 +640,95 @@ data class CustomDiscriminatorContainerDto(val event: CustomDiscriminatorEvent) 
     val example = CustomDiscriminatorContainerDto(CustomDiscriminatorEvent.KickedOff.example)
   }
 }
+
+// --- @get:Deprecated use-site target, and @Deprecated on a sealed subclass property ---
+
+@Serializable
+data class GetterDeprecatedDto(
+    @get:Deprecated("Use replacement instead") val legacy: String,
+    val replacement: String,
+) {
+  companion object {
+    val example = GetterDeprecatedDto("old", "new")
+  }
+}
+
+@Serializable
+sealed class DeprecatedSealedBase {
+  @Suppress("DEPRECATION")
+  @Serializable
+  @SerialName("deprecated_leaf")
+  data class DeprecatedLeaf(
+      @Deprecated("Use current instead") val legacy: String,
+      val current: String,
+  ) : DeprecatedSealedBase() {
+    companion object {
+      val example = DeprecatedLeaf("old", "new")
+    }
+  }
+}
+
+@Serializable
+data class DeprecatedSealedContainerDto(val payload: DeprecatedSealedBase) {
+  companion object {
+    val example = DeprecatedSealedContainerDto(DeprecatedSealedBase.DeprecatedLeaf.example)
+  }
+}
+
+// --- @SerialName aliasing another class's qualified name (known limitation) ---
+
+@Suppress("DEPRECATION")
+@Serializable
+data class SerialNameDecoy(@Deprecated("Decoy is deprecated") val field: String)
+
+@Serializable
+@SerialName("no.liflig.http4k.kotlinx.jsonschema.SerialNameDecoy")
+data class AliasedToDecoyDto(val field: String) {
+  companion object {
+    val example = AliasedToDecoyDto("value")
+  }
+}
+
+// --- Class-level @SerialName that is not a loadable class name ---
+
+@Suppress("DEPRECATION")
+@Serializable
+@SerialName("renamed_item")
+data class RenamedDeprecatedDto(
+    @Deprecated("Use replacement instead") val legacy: String,
+    val replacement: String,
+) {
+  companion object {
+    val example = RenamedDeprecatedDto("old", "new")
+  }
+}
+
+@Serializable
+data class RenamedDeprecatedContainerDto(val items: List<RenamedDeprecatedDto>) {
+  companion object {
+    val example = RenamedDeprecatedContainerDto(listOf(RenamedDeprecatedDto.example))
+  }
+}
+
+// --- @Deprecated properties ---
+
+@Suppress("DEPRECATION")
+@Serializable
+data class DeprecatedFieldDto(
+    @Deprecated("Use replacement instead") val legacy: String,
+    val replacement: String,
+    @Deprecated("Use replacement instead") val legacyNullable: String?,
+    @Deprecated("Use replacementInner instead") val legacyInner: InnerDto,
+    @Deprecated("Use replacement instead") @SerialName("legacy_renamed") val legacyRenamed: String,
+) {
+  companion object {
+    val example =
+        DeprecatedFieldDto(
+            legacy = "old",
+            replacement = "new",
+            legacyNullable = "old-nullable",
+            legacyInner = InnerDto.example,
+            legacyRenamed = "old-renamed",
+        )
+  }
+}

@@ -15,12 +15,15 @@ enum class NullableStrategy {
    * [{"type": "string"}, {"type": "null"}]}`.
    *
    * Nullable `$ref` types (classes, enums, sealed hierarchies) are emitted as plain `{"$ref":
-   * "..."}` without an `anyOf` wrapper. The field is already excluded from the `required` array, so
-   * generators correctly treat it as optional.
+   * "..."}` without an `anyOf` wrapper, since such a schema has no `type` field to merge `"null"`
+   * into.
    *
-   * Trade-off: For `$ref` types, strict JSON Schema validators will not know the field accepts
-   * `null` (only that it's optional). This is acceptable for TypeScript code generators, which
-   * treat optional and nullable identically.
+   * Trade-off: for `$ref` types the schema then says nothing about the field accepting `null`. If
+   * the field also has a Kotlin default it is absent from `required`, and generators treat it as
+   * optional — close enough for TypeScript generators, which conflate optional and nullable. If it
+   * has no default it *is* in `required` (`required` follows `descriptor.isElementOptional`, not
+   * nullability), and the `null` case is not expressed at all. Use [ANYOF] when that distinction
+   * matters.
    */
   TYPE_ARRAY,
 
