@@ -39,6 +39,11 @@ class KotlinxOpenApi3Renderer<NODE : Any>(
   private val delegate = OpenApi3ApiRenderer(json, refLocationPrefix)
   private val jsonToJsonSchema = JsonToJsonSchema(json, refLocationPrefix)
 
+  private companion object {
+    /** Document keys whose values are example payloads, not OpenAPI structure. */
+    val EXAMPLE_KEYS = setOf("example", "examples")
+  }
+
   override fun api(api: Api<NODE>): NODE = stripNullValues(delegate.api(api))
 
   override fun toSchema(
@@ -74,13 +79,22 @@ class KotlinxOpenApi3Renderer<NODE : Any>(
   /**
    * Recursively strips null values from JSON objects. http4k's [OpenApi3ApiRenderer] emits
    * `"description": null` for unset fields, which is invalid in the OpenAPI spec.
+   *
+   * Values under [EXAMPLE_KEYS] are left untouched. Those subtrees are example *payloads* rather
+   * than document scaffolding, and a `null` in one is data: it is what the endpoint actually
+   * serializes for a nullable field. Stripping it produced an example that omitted properties its
+   * own schema listed as `required`, and that under-reported the response body.
    */
   private fun stripNullValues(node: NODE): NODE =
       when (json.typeOf(node)) {
         JsonType.Object ->
             json.obj(
                 json.fields(node).mapNotNull { (key, value) ->
-                  if (json.typeOf(value) == JsonType.Null) null else key to stripNullValues(value)
+                  when {
+                    json.typeOf(value) == JsonType.Null -> null
+                    key in EXAMPLE_KEYS -> key to value
+                    else -> key to stripNullValues(value)
+                  }
                 },
             )
         JsonType.Array -> json.array(json.elements(node).map { stripNullValues(it) })
