@@ -83,7 +83,10 @@ Five source files total:
 5. `OpenApi3` assembles all schemas into the final document and calls
    `KotlinxOpenApi3Renderer.api(api)`, which delegates to `OpenApi3ApiRenderer` then
    **strips null fields** (http4k emits `"description": null` for unset descriptions,
-   which is invalid OpenAPI).
+   which is invalid OpenAPI). Subtrees under `example` / `examples` are exempt: those
+   are payloads, not scaffolding, and a `null` in one is data — the value the endpoint
+   actually serializes for a nullable field. Stripping them produced examples that
+   omitted properties their own schema listed as `required`.
 
 ## Sealed class handling
 
