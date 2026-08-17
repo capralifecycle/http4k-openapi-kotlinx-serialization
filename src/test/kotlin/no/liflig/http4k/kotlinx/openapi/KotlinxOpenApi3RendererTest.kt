@@ -7,10 +7,12 @@ import io.kotest.matchers.maps.shouldNotBeEmpty
 import io.kotest.matchers.maps.shouldNotContainKey
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json as KotlinxJson
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -103,6 +105,16 @@ class KotlinxOpenApi3RendererTest {
   data class TaskDto(
       val id: String,
       val status: TaskStatus,
+  )
+
+  /**
+   * Nullable, but without Kotlin defaults, so both fields are `required` and an example that omits
+   * them would not validate against the schema.
+   */
+  @Serializable
+  data class OverridesDto(
+      val overriddenName: String?,
+      val overriddenCount: Int?,
   )
 
   private val json = KotlinxSerialization
@@ -271,6 +283,88 @@ class KotlinxOpenApi3RendererTest {
     schemas shouldNotContainKey "status"
     schemas.keys.filter { it.contains("TaskStatus", ignoreCase = true) } shouldBe
         listOf("TaskStatus")
+  }
+
+  @Test
+  fun `null values in a response example are preserved`() {
+    val responseLens = Body.auto<OverridesDto>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/overrides" meta
+              {
+                summary = "Get overrides"
+                returning(
+                    OK,
+                    responseLens to OverridesDto(overriddenName = null, overriddenCount = 3),
+                )
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val spec = fetchSpec(app)
+
+    // The document-level null stripping must not reach into example payloads: `overriddenName` is
+    // required by the schema, so dropping it would leave the example failing its own validation.
+    val example =
+        spec["paths"]
+            ?.jsonObject
+            ?.get("/overrides")
+            ?.jsonObject
+            ?.get("get")
+            ?.jsonObject
+            ?.get("responses")
+            ?.jsonObject
+            ?.get("200")
+            ?.jsonObject
+            ?.get("content")
+            ?.jsonObject
+            ?.values
+            ?.first()
+            ?.jsonObject
+            ?.get("example")
+            ?.jsonObject
+    example.shouldNotBeNull()
+    example.keys shouldBe setOf("overriddenName", "overriddenCount")
+    example["overriddenName"] shouldBe JsonNull
+    example["overriddenCount"]?.jsonPrimitive?.content shouldBe "3"
+
+    val required =
+        spec["components"]
+            ?.jsonObject
+            ?.get("schemas")
+            ?.jsonObject
+            ?.get("OverridesDto")
+            ?.jsonObject
+            ?.get("required")
+            ?.jsonArray
+            ?.map { it.jsonPrimitive.content }
+    required shouldBe listOf("overriddenName", "overriddenCount")
+  }
+
+  @Test
+  fun `unset descriptions are still stripped from the document`() {
+    val responseLens = Body.auto<CreateResponse>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/items" meta
+              {
+                summary = "Get item"
+                returning(OK, responseLens to CreateResponse("id-1", true))
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    // The whole point of stripNullValues: http4k emits "description": null for unset descriptions,
+    // which is invalid OpenAPI. Preserving example payloads must not bring those back.
+    fetchSpec(app).toString() shouldNotContain "null"
   }
 
   @Test
