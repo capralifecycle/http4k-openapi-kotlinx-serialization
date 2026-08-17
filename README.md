@@ -321,6 +321,15 @@ schema.toSchema(myDto, overrideDefinitionId = "CreateUserRequest")
 
 This is useful when the same DTO class is used for different endpoints and you want distinct schema names in the OpenAPI document. For sealed classes, only the top-level definition is renamed — subclass definitions keep their original names.
 
+**Enums ignore the override.** http4k renders an enum query or path parameter by calling `toSchema(enumConstants[0], meta.name, null)` — it passes the *parameter* name as the override. Honouring that would key the definition by the parameter (`status`) rather than the type (`TaskStatusDto`), and since the same enum is usually also reached through a request or response body, the document would end up with two identical components under different names. An enum always resolves to a named definition from its serial name, so the override has nothing useful to add:
+
+```kotlin
+schema.toSchema(TaskStatusDto.OPEN, overrideDefinitionId = "status")
+// -> definition "TaskStatusDto", $ref "#/components/schemas/TaskStatusDto"
+```
+
+If you genuinely need two differently-named schemas for one enum, declare a second enum type.
+
 ### Sealed class example discovery
 
 When the schema creator encounters a sealed class field, it needs example instances of the subclasses to generate complete schemas. The `sealedClassExampleProvider` parameter controls how these are discovered.

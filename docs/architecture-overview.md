@@ -76,10 +76,17 @@ Five source files total:
    3. Use the encoded `JsonElement` in parallel to extract example values by field name
       (descriptor gives structure, JSON tree gives values — reflection alone can't
       because of `@SerialName` invisibility).
-   4. Apply `overrideDefinitionId` after collision resolution if set.
+   4. Apply `overrideDefinitionId` after collision resolution if set — **except for
+      enums**, which keep their serial name. http4k passes the *parameter* name as the
+      override when rendering an enum query/path parameter, so honouring it would key
+      the definition by the parameter (`status`) instead of the type (`TaskStatusDto`)
+      and duplicate the component whenever the same enum also appears in a body.
 4. **Step 3 — Enum fallback.** If step 2 returned an empty schema and `obj` is a Java
    `Enum<*>` (http4k passes `paramMeta.clz.java.enumConstants[0]` for query/path enum
-   parameters), generate `{"type": "string", "enum": [...]}` via reflection.
+   parameters), generate `{"type": "string", "enum": [...]}` via reflection, named after
+   the declaring class for the same reason. Read the constants off the declaring class,
+   not `javaClass` — the latter is a synthetic subclass for constants with a body, where
+   `enumConstants` is null.
 5. `OpenApi3` assembles all schemas into the final document and calls
    `KotlinxOpenApi3Renderer.api(api)`, which delegates to `OpenApi3ApiRenderer` then
    **strips null fields** (http4k emits `"description": null` for unset descriptions,

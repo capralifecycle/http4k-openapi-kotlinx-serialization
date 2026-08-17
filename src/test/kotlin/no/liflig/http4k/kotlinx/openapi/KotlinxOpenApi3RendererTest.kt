@@ -4,6 +4,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.maps.shouldContainKey
 import io.kotest.matchers.maps.shouldNotBeEmpty
+import io.kotest.matchers.maps.shouldNotContainKey
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.SerialName
@@ -91,6 +92,18 @@ class KotlinxOpenApi3RendererTest {
     INACTIVE,
     ALL,
   }
+
+  @Serializable
+  enum class TaskStatus {
+    OPEN,
+    DONE,
+  }
+
+  @Serializable
+  data class TaskDto(
+      val id: String,
+      val status: TaskStatus,
+  )
 
   private val json = KotlinxSerialization
 
@@ -198,18 +211,66 @@ class KotlinxOpenApi3RendererTest {
     val spec = fetchSpec(app)
     val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
 
-    val enumDef =
-        schemas.values.firstOrNull { def ->
-          val obj = def.jsonObject
-          obj["type"]?.jsonPrimitive?.content == "string" && obj.containsKey("enum")
-        }
-    enumDef.shouldNotBeNull()
+    // Keyed by the enum type, not by the "status" parameter name that http4k passes as
+    // overrideDefinitionId.
+    schemas shouldContainKey "StatusFilter"
+    schemas shouldNotContainKey "status"
 
     val enumValues =
-        enumDef.jsonObject["enum"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+        schemas["StatusFilter"]
+            ?.jsonObject
+            ?.get("enum")
+            ?.jsonArray
+            ?.map { it.jsonPrimitive.content }
+            .shouldNotBeNull()
     enumValues shouldContain "ACTIVE"
     enumValues shouldContain "INACTIVE"
     enumValues shouldContain "ALL"
+
+    val paramSchema =
+        spec["paths"]
+            ?.jsonObject
+            ?.get("/items")
+            ?.jsonObject
+            ?.get("get")
+            ?.jsonObject
+            ?.get("parameters")
+            ?.jsonArray
+            ?.single()
+            ?.jsonObject
+            ?.get("schema")
+            ?.jsonObject
+    paramSchema?.get("\$ref")?.jsonPrimitive?.content shouldBe "#/components/schemas/StatusFilter"
+  }
+
+  @Test
+  fun `enum used as both query parameter and body field yields one component`() {
+    val statusLens = Query.enum<TaskStatus>().required("status")
+    val bodyLens = Body.auto<TaskDto>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/tasks" meta
+              {
+                summary = "List tasks"
+                queries += statusLens
+                returning(OK, bodyLens to TaskDto("id-1", TaskStatus.OPEN))
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val spec = fetchSpec(app)
+    val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
+
+    // Both the parameter and the body field resolve to the same definition. Honouring the
+    // parameter name as overrideDefinitionId would emit a second, identical "status" component.
+    schemas shouldContainKey "TaskStatus"
+    schemas shouldNotContainKey "status"
+    schemas.keys.filter { it.contains("TaskStatus", ignoreCase = true) } shouldBe
+        listOf("TaskStatus")
   }
 
   @Test

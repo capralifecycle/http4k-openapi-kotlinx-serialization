@@ -755,6 +755,21 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
+  fun `overrideDefinitionId is ignored for enums`() {
+    // http4k renders an enum query or path parameter by passing the *parameter* name as
+    // overrideDefinitionId. The enum keeps its own name so the definition is not duplicated
+    // under the parameter name when the same enum also appears in a request or response body.
+    val schema = schemaCreator.toSchema(TestEnum.VALUE_A, overrideDefinitionId = "status")
+
+    schema.definitions shouldContainKey "TestEnum"
+    schema.definitions shouldNotContainKey "status"
+
+    val ref = (schema.node as JsonObject)["\$ref"]
+    ref.shouldNotBeNull()
+    (ref as JsonPrimitive).content shouldBe "#/components/schemas/TestEnum"
+  }
+
+  @Test
   fun `overrideDefinitionId on sealed class renames parent only`() {
     val schema =
         schemaCreator.toSchema(

@@ -92,15 +92,24 @@ class KotlinxOpenApi3Renderer<NODE : Any>(
       refModelNamePrefix: String?,
       overrideDefinitionId: String?,
   ): JsonSchema<NODE> {
+    // `javaClass` is a synthetic subclass for constants that declare a body - `isEnum` is false
+    // and `enumConstants` is null on it - so step up to the declaring class in that case.
+    val enumClass: Class<*> = obj.javaClass.let { if (it.isEnum) it else it.superclass }
+    val constants = enumClass.enumConstants.orEmpty().filterIsInstance<Enum<*>>()
     val newDefinition =
         json.obj(
             "example" to json.string(obj.name),
             "type" to json.string("string"),
-            "enum" to json.array(obj.javaClass.enumConstants.map { json.string(it.name) }),
+            "enum" to json.array(constants.map { json.string(it.name) }),
         )
+    // Named after the type, not after [overrideDefinitionId]. See the enum note in
+    // [KotlinxSerializationJsonSchemaCreator.toSchema]: http4k passes a parameter name as the
+    // override, which would key this definition by the parameter rather than the enum.
     val definitionId =
         (refModelNamePrefix.orEmpty()) +
-            (overrideDefinitionId ?: ("object" + newDefinition.hashCode()))
+            (enumClass.simpleName.ifEmpty { null }
+                ?: overrideDefinitionId
+                ?: ("object" + newDefinition.hashCode()))
     return JsonSchema(
         json { obj("\$ref" to string("#/$refLocationPrefix/$definitionId")) },
         mapOf(definitionId to newDefinition),
