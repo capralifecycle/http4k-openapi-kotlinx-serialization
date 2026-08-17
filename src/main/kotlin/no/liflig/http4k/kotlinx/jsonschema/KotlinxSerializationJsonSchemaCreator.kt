@@ -95,7 +95,14 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
     // this sweep, refs emitted before the collision would be dangling.
     val node = applyCollisionRenames(rawNode, defs)
 
-    if (overrideDefinitionId != null) {
+    // Enums keep their own name even under an override. http4k renders an enum query or path
+    // parameter by calling `toSchema(enumConstants[0], meta.name, null)` - the *parameter* name
+    // becomes the override. Honouring it would key the enum's definition by the parameter
+    // (`status`) rather than the type (`TaskStatusDto`), and since the same enum is normally also
+    // reached through a request or response body, the document would carry two identical
+    // components under different names. An enum always resolves to a named definition from its
+    // serial name, so there is nothing an override can usefully add.
+    if (overrideDefinitionId != null && descriptor.kind != SerialKind.ENUM) {
       return applyOverrideDefinitionId(node, defs, overrideDefinitionId, refModelNamePrefix)
     }
 
