@@ -24,6 +24,11 @@ enum class NullableStrategy {
    * has no default it *is* in `required` (`required` follows `descriptor.isElementOptional`, not
    * nullability), and the `null` case is not expressed at all. Use [ANYOF] when that distinction
    * matters.
+   *
+   * The same gap surfaces in rendered examples: `KotlinxOpenApi3Renderer` preserves `null` inside
+   * `example` payloads, so a nullable `$ref` field serialized as `null` yields an example that its
+   * own plain-`$ref` schema rejects. Tools that validate examples against schemas flag it. [ANYOF]
+   * closes that too.
    */
   TYPE_ARRAY,
 
