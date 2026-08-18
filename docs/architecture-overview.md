@@ -222,7 +222,20 @@ parses cleanly (no schema-validity bugs slip through).
 - **`null` description fields in OpenAPI.** http4k's `OpenApi3ApiRenderer` emits
   `"description": null` for unset descriptions, which trips strict OpenAPI parsers.
   `KotlinxOpenApi3Renderer.api()` recursively strips null object values from the
-  rendered tree before returning.
+  rendered tree before returning — everywhere except under `example` / `examples`,
+  where a `null` is payload data rather than scaffolding (see step 5 of the data flow
+  above). The rendered document is therefore null-free outside example payloads, not
+  null-free everywhere.
+- **Preserved example nulls vs. nullable `$ref` schemas.** The `example` / `examples`
+  exemption above keeps `null` in example payloads, but under the default
+  `NullableStrategy.TYPE_ARRAY` a nullable `$ref` property renders as a plain `$ref`
+  (see `wrapNullable` — there is no `type` field to merge `"null"` into). A DTO with a
+  nullable sealed-class, enum or nested-object field serialized as `null` therefore
+  produces an example that its own schema rejects, and tools that validate examples
+  against schemas report a type mismatch. Nullable primitives are fine —
+  `{"type": ["string", "null"]}` accepts the null. This is the documented `TYPE_ARRAY`
+  trade-off surfacing in examples rather than a separate defect; `NullableStrategy.ANYOF`
+  makes both the schema and the example consistent.
 - **Empty-schema sentinel from http4k.** http4k calls `toSchema(object {})` in
   `exampleSchemaIsValid` to test the comparator path. Resolving a serializer for an
   anonymous object throws `SerializationException`; the schema creator catches and

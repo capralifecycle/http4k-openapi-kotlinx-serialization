@@ -236,7 +236,9 @@ val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
 
 **Limitation — nullable `$ref` inside collections**: at the field level, an optional field at least signals to a generator that the value may be absent. For `$ref` types inside collection elements — `List<Child?>`, `Map<String, Child?>`, `Set<Child?>` — there is no field-level `required` at all; the element schema is just a `$ref` and the rendered schema documents elements that don't accept `null`. If a DTO uses nullable refs inside collections AND consumers need to distinguish missing from null at the element level, switch to `ANYOF`.
 
-Use `ANYOF` if your schema consumers are strict validators that need to distinguish "field absent" from "field present with value null", or if you have nullable refs inside collection elements:
+**Limitation — nullable `$ref` in rendered examples**: the renderer keeps `null` values inside `example` payloads, because a `null` there is data — it is what the endpoint actually serializes for a nullable field (kotlinx encodes explicit nulls by default). For a nullable `$ref` field the example therefore contains `"field": null` while the schema is a plain `$ref` that admits only the referenced object, so validators that check examples against their schema (Swagger UI, Spectral, `openapi-generator-cli`) report a type mismatch on that field. Nullable primitives are unaffected — `{"type": ["string", "null"]}` accepts the null. Switch to `ANYOF` if your endpoints return explicit nulls for `$ref`-typed fields and your tooling validates examples.
+
+Use `ANYOF` if your schema consumers are strict validators that need to distinguish "field absent" from "field present with value null", if you have nullable refs inside collection elements, or if example payloads containing nulls for `$ref` fields must validate:
 
 ```kotlin
 val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
