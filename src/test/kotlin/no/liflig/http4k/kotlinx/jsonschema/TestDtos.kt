@@ -795,6 +795,30 @@ data class DescribedEnumContainerDto(val system: DescribedEnum) {
 
 @Suppress("DEPRECATION")
 @Serializable
+data class DeprecatedMessageDto(
+    @Deprecated("Use replacement instead") val legacy: String,
+    @Deprecated("") val legacyBlankMessage: String,
+    @Description("This field still means something.")
+    @Deprecated("Use replacement instead")
+    val legacyDescribed: String,
+    /** Description comes from [DescribedCode]; the deprecation message is appended to it. */
+    @Deprecated("Use replacement instead") val legacyTyped: DescribedCode,
+    val replacement: String,
+) {
+  companion object {
+    val example =
+        DeprecatedMessageDto(
+            legacy = "old",
+            legacyBlankMessage = "old-blank",
+            legacyDescribed = "old-described",
+            legacyTyped = DescribedCode("NO204"),
+            replacement = "new",
+        )
+  }
+}
+
+@Suppress("DEPRECATION")
+@Serializable
 data class GetterDescribedDto(
     @get:Description("Described through the getter.") val viaGetter: String,
     val plain: String,

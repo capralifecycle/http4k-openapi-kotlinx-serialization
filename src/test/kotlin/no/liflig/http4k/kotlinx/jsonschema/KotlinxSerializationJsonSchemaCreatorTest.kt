@@ -1176,6 +1176,59 @@ class KotlinxSerializationJsonSchemaCreatorTest {
         "What this field is for."
   }
 
+  /** Opted in; the default is off — see `deprecation messages are omitted by default`. */
+  private val deprecationMessageCreator =
+      KotlinxSerializationJsonSchemaCreator<JsonElement>(
+          json = KotlinxSerialization,
+          kotlinxJson = kotlinxJson,
+          includeDeprecationMessages = true,
+      )
+
+  @Test
+  fun `deprecation messages are omitted by default`() {
+    // A version bump must not change what a service publishes: @Deprecated messages exist all over
+    // every service already, and are written for Kotlin callers rather than API consumers.
+    val schema = schemaCreator.toSchema(DeprecatedMessageDto.example)
+    val definition = schema.definitions["DeprecatedMessageDto"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+
+    properties["legacy"] as JsonObject shouldNotContainKey "description"
+
+    // The marker itself is not affected by the flag - only the prose.
+    (properties["legacy"] as JsonObject).shouldContainKey("deprecated")
+
+    // A property with its own description keeps it, without the message appended.
+    descriptionOf(definition, "legacyDescribed") shouldBe "This field still means something."
+  }
+
+  @Test
+  fun `appends the deprecation message to a property's description`() {
+    val schema = deprecationMessageCreator.toSchema(DeprecatedMessageDto.example)
+    val definition = schema.definitions["DeprecatedMessageDto"]
+
+    // With nothing else to say, the message is the whole description.
+    descriptionOf(definition, "legacy") shouldBe "Use replacement instead"
+
+    // A description and a deprecation message answer different questions - what the field is, and
+    // what to use instead - so both survive. Replacing one with the other would mean that adding a
+    // description to a deprecated property silently deleted its migration hint.
+    descriptionOf(definition, "legacyDescribed") shouldBe
+        "This field still means something.\n\nUse replacement instead"
+
+    // A blank message has nothing to say, so no key is emitted.
+    val properties = (definition as JsonObject)["properties"] as JsonObject
+    properties["legacyBlankMessage"] as JsonObject shouldNotContainKey "description"
+    properties["replacement"] as JsonObject shouldNotContainKey "description"
+  }
+
+  @Test
+  fun `appends the deprecation message to a description inherited from the type`() {
+    val schema = deprecationMessageCreator.toSchema(DeprecatedMessageDto.example)
+
+    descriptionOf(schema.definitions["DeprecatedMessageDto"], "legacyTyped") shouldBe
+        "A location code, as the traffic systems write it.\n\nUse replacement instead"
+  }
+
   @Test
   fun `ANYOF strategy renders description outside the anyOf branches`() {
     val anyOfSchemaCreator =
