@@ -7,12 +7,13 @@ import io.kotest.matchers.maps.shouldNotBeEmpty
 import io.kotest.matchers.maps.shouldNotContainKey
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json as KotlinxJson
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -152,6 +153,18 @@ class KotlinxOpenApi3RendererTest {
     response.status.code shouldBe 200
     return KotlinxJson.parseToJsonElement(response.bodyString()).jsonObject
   }
+
+  /** Matches the body-example positions, the only ones allowed to hold a null. */
+  private val exampleBodyPath = Regex("""\.content\.[^.]+\.example(\.|$)""")
+
+  /** Dot-joined path of every JSON null in [element], array indices rendered as `[n]`. */
+  private fun nullPaths(element: JsonElement, path: String = ""): List<String> =
+      when (element) {
+        is JsonNull -> listOf(path)
+        is JsonObject -> element.entries.flatMap { (key, value) -> nullPaths(value, "$path.$key") }
+        is JsonArray -> element.flatMapIndexed { index, value -> nullPaths(value, "$path[$index]") }
+        else -> emptyList()
+      }
 
   @Test
   fun `renders openapi document without jackson`() {
@@ -355,15 +368,71 @@ class KotlinxOpenApi3RendererTest {
   }
 
   @Test
-  fun `unset descriptions are still stripped from the document`() {
-    val responseLens = Body.auto<CreateResponse>().toLens()
+  fun `null scaffolding values are stripped from the document`() {
+    val renderer = KotlinxOpenApi3Renderer(json = json, schema = schema)
+
+    // The whole point of stripNullValues: a "description": null trips strict OpenAPI parsers.
+    // Driven through a hand-built document because http4k 6.57.1.0 guards every null-capable
+    // emission of its own (`description?.let`, non-null ApiPath.summary), so no route fixture can
+    // produce one — the strip defends against http4k versions that do not. The nulls sit at an
+    // object, a nested object and an array element to cover all three arms of the walk.
+    val schemas =
+        json.obj(
+            "WidgetDto" to
+                json.obj(
+                    "type" to json.string("object"),
+                    "description" to json.nullNode(),
+                    "properties" to
+                        json.obj(
+                            "name" to
+                                json.obj(
+                                    "type" to json.string("string"),
+                                    "description" to json.nullNode(),
+                                ),
+                        ),
+                    "oneOf" to
+                        json.array(
+                            listOf(
+                                json.obj(
+                                    "type" to json.string("object"),
+                                    "title" to json.nullNode(),
+                                ),
+                            ),
+                        ),
+                ),
+        )
+
+    val document =
+        renderer.api(
+            Api(
+                info = ApiInfo("Test API", "1.0.0"),
+                tags = emptyList(),
+                paths = emptyMap(),
+                components = Components(schemas = schemas, securitySchemes = json.obj()),
+                servers = listOf(ApiServer(Uri.of("http://localhost:8080"))),
+                webhooks = null,
+                openapi = "3.1.0",
+            ),
+        )
+
+    nullPaths(document) shouldBe emptyList()
+  }
+
+  @Test
+  fun `rendered document keeps nulls only inside example payloads`() {
+    // Nullable without defaults, so kotlinx encodes the nulls into the example rather than
+    // omitting them the way it does for fields that have one.
+    val responseLens = Body.auto<OverridesDto>().toLens()
 
     val app = buildContract {
       routes +=
-          "/items" meta
+          "/overrides" meta
               {
-                summary = "Get item"
-                returning(OK, responseLens to CreateResponse("id-1", true))
+                summary = "Get overrides"
+                returning(
+                    OK,
+                    responseLens to OverridesDto(overriddenName = null, overriddenCount = 3),
+                )
               } bindContract
               GET to
               { _ ->
@@ -371,9 +440,13 @@ class KotlinxOpenApi3RendererTest {
               }
     }
 
-    // The whole point of stripNullValues: http4k emits "description": null for unset descriptions,
-    // which is invalid OpenAPI. Preserving example payloads must not bring those back.
-    fetchSpec(app).toString() shouldNotContain "null"
+    val nulls = nullPaths(fetchSpec(app))
+
+    // The fixture serializes explicit nulls, so the walk has something to find — a document-wide
+    // "contains no null" assertion would fail on those, and on the "null" in the type arrays that
+    // NullableStrategy.TYPE_ARRAY renders for nullable primitives.
+    nulls.isEmpty() shouldBe false
+    nulls.filterNot { exampleBodyPath.containsMatchIn(it) } shouldBe emptyList()
   }
 
   @Test
