@@ -376,9 +376,12 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
             schema = {
               val elementNames =
                   (0 until descriptor.elementsCount).map { descriptor.getElementName(it) }
-              json.obj(
-                  "type" to json.string("string"),
-                  "enum" to json.array(elementNames.map { json.string(it) }),
+              withClassDescription(
+                  json.obj(
+                      "type" to json.string("string"),
+                      "enum" to json.array(elementNames.map { json.string(it) }),
+                  ),
+                  loadKClass(serialName),
               )
             },
             refModelNamePrefix = refModelNamePrefix,
@@ -418,7 +421,11 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
       schemaFields.add("required" to json.array(requiredFields.map { json.string(it) }))
     }
 
-    val objectSchema = json.obj(schemaFields)
+    val objectSchema =
+        withClassDescription(
+            json.obj(schemaFields),
+            (kType?.classifier as? KClass<*>) ?: loadKClass(serialName),
+        )
 
     val shortName = serialName.substringAfterLast('.')
     val defName =
@@ -541,6 +548,83 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
   private fun withDeprecatedMarker(schema: NODE): NODE =
       json.obj(json.fields(schema).toList() + ("deprecated" to json.boolean(true)))
 
+  /**
+   * Appends `"description"` to an already-built property schema.
+   *
+   * Applied after [wrapNullable] for the same reason as [withDeprecatedMarker]: the description
+   * belongs to the property, so it lands on the outer object in every shape the walk produces
+   * rather than inside one branch of an `anyOf`.
+   */
+  private fun withDescription(schema: NODE, description: String): NODE =
+      json.obj(json.fields(schema).toList() + ("description" to json.string(description)))
+
+  /**
+   * The description for a property: its own [Description], or failing that the one on its declared
+   * type.
+   *
+   * The type-level fallback applies only where [schema] renders the type inlined — a value class,
+   * or one whose custom serializer produces a primitive. Those have no definition of their own to
+   * carry a shared description, so the use site is the only place one can go. A type that renders
+   * as `$ref` does have a definition, and [withClassDescription] puts its description there
+   * instead, once, rather than repeating it at every field holding it.
+   *
+   * Both the property's own annotations and its getter's are read, so the `@get:Description`
+   * use-site form works, as it does for [Deprecated].
+   */
+  private fun descriptionOf(property: KProperty1<*, *>?, schema: NODE): String? {
+    if (property == null) return null
+
+    val onProperty =
+        (property.annotations + property.getter.annotations)
+            .filterIsInstance<Description>()
+            .firstOrNull()
+    if (onProperty != null) return onProperty.value
+
+    if (!rendersAsReference(schema)) {
+      descriptionOn(property.returnType.classifier as? KClass<*>)?.let {
+        return it
+      }
+    }
+
+    return null
+  }
+
+  /** The [Description] declared on [kClass], if any. */
+  private fun descriptionOn(kClass: KClass<*>?): String? =
+      kClass?.annotations?.filterIsInstance<Description>()?.firstOrNull()?.value
+
+  /**
+   * True when [schema] points at a definition rather than describing the type in place.
+   *
+   * Checks inside `anyOf` branches as well as the top level, since a nullable reference renders as
+   * `{"anyOf": [{"$ref": ...}, {"type": "null"}]}` under [NullableStrategy.ANYOF] — the `$ref` sits
+   * one level down, and a top-level-only check would mistake it for an inlined type and duplicate
+   * the definition's description onto every field.
+   */
+  private fun rendersAsReference(schema: NODE): Boolean {
+    if (json.fields(schema).any { (name, _) -> name == "\$ref" }) return true
+
+    val branches = json.fields(schema).firstOrNull { (name, _) -> name == "anyOf" }?.second
+    return branches != null &&
+        json.typeOf(branches) == JsonType.Array &&
+        json.elements(branches).any { branch ->
+          json.typeOf(branch) == JsonType.Object &&
+              json.fields(branch).any { (name, _) -> name == "\$ref" }
+        }
+  }
+
+  /**
+   * Appends the [Description] declared on [kClass] to that type's own definition, so a type
+   * rendered as `$ref` is described once rather than at each use site.
+   *
+   * Prepended rather than appended: `description` reads as a heading for the schema that follows,
+   * and http4k's own `ApiPath` rendering places it there too.
+   */
+  private fun withClassDescription(schema: NODE, kClass: KClass<*>?): NODE =
+      descriptionOn(kClass)?.let { description ->
+        json.obj(listOf("description" to json.string(description)) + json.fields(schema).toList())
+      } ?: schema
+
   private fun convertJsonElement(element: JsonElement): NODE {
     return when (element) {
       is JsonPrimitive -> {
@@ -654,9 +738,13 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
               kType = property?.returnType,
           )
 
+      val describedSchema =
+          descriptionOf(property, elementSchema)?.let { withDescription(elementSchema, it) }
+              ?: elementSchema
+
       properties.add(
           elementName to
-              if (isDeprecated(property)) withDeprecatedMarker(elementSchema) else elementSchema
+              if (isDeprecated(property)) withDeprecatedMarker(describedSchema) else describedSchema
       )
 
       val isOptional = descriptor.isElementOptional(i)

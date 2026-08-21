@@ -186,15 +186,29 @@ parses cleanly (no schema-validity bugs slip through).
   kotlinx.serialization.** If a future version reshapes the descriptor, tests fail with
   a clear error (defensive validation in `KotlinxSerializationJsonSchemaCreator`). Read
   the thrown message before assuming a deeper bug.
-- **`@Deprecated` detection is reflection-based, and has to be.** This does not
-  contradict the first pitfall above, which is about *structure* — names, nullability,
-  polymorphism — all of which the descriptor owns. kotlinx.serialization only retains
-  annotations marked `@SerialInfo` in the generated descriptor, so
+- **`@Deprecated` and `@Description` detection is reflection-based, and has to be.** This
+  does not contradict the first pitfall above, which is about *structure* — names,
+  nullability, polymorphism — all of which the descriptor owns. kotlinx.serialization only
+  retains annotations marked `@SerialInfo` in the generated descriptor, so
   `getElementAnnotations(i)` never sees `kotlin.Deprecated`; reflection is the only
   source. `buildObjectProperties` already resolves each element to its `KProperty` via
   `resolveProperty` (to thread generic `KType`s), so the annotation check rides along on
   a lookup that was happening anyway. Same rationale as
   `SealedClassExampleProvider`'s `companion.example` discovery.
+
+  `@Description` is a library annotation, so `@SerialInfo` was available and deliberately
+  not used: it is `@ExperimentalSerializationApi`, and serial-info annotations on
+  constructor-parameters-as-properties are silently dropped without an explicit target —
+  which is how essentially every DTO in Liflig services declares its fields.
+
+- **A type's description goes to the definition or the use site, never both.** A type that
+  renders as `$ref` owns a definition, so `withClassDescription` puts its `@Description`
+  there. A type flattened into the property — an inline value class, or one whose custom
+  serializer yields a primitive — has no definition, so `descriptionOf` falls back to it at
+  the use site. `rendersAsReference` decides which, and it has to look **inside `anyOf`
+  branches**: under `NullableStrategy.ANYOF` a nullable `$ref` sits one level down, and a
+  top-level-only check reads it as inlined and copies the definition's description onto
+  every field holding one.
 - **`@Transient` fields disappear silently** — kotlinx.serialization's compiler plugin
   excludes them from both the descriptor and the encoded JSON. No special handling
   required; they simply don't appear in schemas.

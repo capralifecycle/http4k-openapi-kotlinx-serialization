@@ -1,6 +1,6 @@
 # http4k-openapi-kotlinx-serialization
 
-OpenAPI schema generation for http4k contract endpoints using kotlinx.serialization descriptors instead of reflection.
+OpenAPI schema generation for http4k contract endpoints driven by kotlinx.serialization descriptors rather than Jackson reflection.
 
 ## Why This Exists
 
@@ -289,6 +289,53 @@ data class JourneyDto(
 Properties without the annotation carry no `deprecated` key at all, rather than `"deprecated": false`. The marker is placed on the property's outer schema in every shape — alongside `type` for primitives, as a sibling of `$ref` for reference types (legal in OpenAPI 3.1 / JSON Schema 2020-12), and outside the branches under `NullableStrategy.ANYOF`.
 
 Only properties are marked. `@Deprecated` on a DTO class itself has no effect on the schema.
+
+### Field descriptions
+
+`@Description` renders as `"description"`. It goes on a property, or on a type — a type's description applies to every use of it, which is how a shared vocabulary type gets described once rather than at each field holding it.
+
+```kotlin
+@Description("Planned departure date from route origin, per the route plan.")
+@Serializable @JvmInline value class NominalDate(val value: LocalDate)
+
+@Serializable
+data class TrainIdDto(
+    @Description("The train number as the traffic systems report it.") val trainNumber: String,
+    val nominalDate: NominalDate,
+    @Deprecated("Use nominalDate instead") val date: String,
+)
+```
+
+```json
+{
+  "trainNumber": { "type": "string", "description": "The train number as the traffic systems report it." },
+  "nominalDate": { "type": "string", "format": "date", "description": "Planned departure date from route origin, per the route plan." },
+  "date": { "type": "string", "deprecated": true, "description": "Use nominalDate instead" }
+}
+```
+
+Resolution order for a property: its own `@Description`, then its type's, then its `@Deprecated` message. First one found wins, and a property with none carries no `description` key.
+
+**Where a type's description lands depends on how the type renders.** A type flattened into the property — an inline value class, or one whose custom serializer produces a primitive — has no definition of its own, so its description goes on each property holding it. A type rendered as `$ref` does have a definition, and its description goes there, once:
+
+```kotlin
+@Description("Which system owns the train at a given time.")
+@Serializable enum class ResponsibleSystem { GTS, CONNECT }
+```
+
+```json
+"components": {
+  "schemas": {
+    "ResponsibleSystem": {
+      "description": "Which system owns the train at a given time.",
+      "type": "string",
+      "enum": ["GTS", "CONNECT"]
+    }
+  }
+}
+```
+
+`@get:Description` works for the use-site form, as with `@Deprecated`. An annotation is needed rather than KDoc because KDoc does not survive compilation — and because KDoc is written for maintainers, which is not the same audience as the API's consumers.
 
 ### Inline value classes
 

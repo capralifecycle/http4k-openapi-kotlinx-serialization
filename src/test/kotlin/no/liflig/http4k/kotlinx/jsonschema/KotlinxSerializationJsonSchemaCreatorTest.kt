@@ -1082,4 +1082,155 @@ class KotlinxSerializationJsonSchemaCreatorTest {
       (branch as JsonObject) shouldNotContainKey "deprecated"
     }
   }
+
+  // --- @Description ---
+
+  /** Reads a property's `description` out of a rendered definition. */
+  private fun descriptionOf(definition: JsonElement?, property: String): String? {
+    val properties = (definition as JsonObject)["properties"] as JsonObject
+    return ((properties[property] as JsonObject)["description"] as? JsonPrimitive)?.content
+  }
+
+  @Test
+  fun `renders description for properties annotated with Description`() {
+    val schema = schemaCreator.toSchema(DescribedFieldDto.example)
+    val definition = schema.definitions["DescribedFieldDto"]
+
+    descriptionOf(definition, "described") shouldBe "What this field is for."
+
+    // Non-annotated properties carry no description key at all, rather than an empty string.
+    val properties = (definition as JsonObject)["properties"] as JsonObject
+    properties["undescribed"] as JsonObject shouldNotContainKey "description"
+
+    // Composes with the nullable type array rather than replacing it.
+    val nullable = properties["describedNullable"] as JsonObject
+    (nullable["description"] as JsonPrimitive).content shouldBe "Nullable, and still described."
+    (nullable["type"] as JsonArray).map { (it as JsonPrimitive).content } shouldBe
+        listOf("string", "null")
+
+    // Sibling of $ref, which OpenAPI 3.1 / JSON Schema 2020-12 permits.
+    val inner = properties["describedInner"] as JsonObject
+    (inner["description"] as JsonPrimitive).content shouldBe "Described alongside a reference."
+    inner shouldContainKey "\$ref"
+
+    descriptionOf(definition, "described_renamed") shouldBe
+        "Described under a different serialized name."
+  }
+
+  @Test
+  fun `falls back to the description on an inlined property type`() {
+    val schema = schemaCreator.toSchema(DescribedFieldDto.example)
+    val definition = schema.definitions["DescribedFieldDto"]
+
+    // A value class is flattened into the property's schema, so it has no definition of its own
+    // to carry the description and the use site is the only place it can go.
+    descriptionOf(definition, "fromType") shouldBe
+        "A location code, as the traffic systems write it."
+
+    // The property's own description wins over the type's.
+    descriptionOf(definition, "overridesType") shouldBe
+        "The property wins over the type's own description."
+  }
+
+  @Test
+  fun `does not copy a type description onto properties that reference it`() {
+    val schema = schemaCreator.toSchema(DescribedFieldDto.example)
+    val definition = schema.definitions["DescribedFieldDto"] as JsonObject
+    val properties = definition["properties"] as JsonObject
+
+    // The referenced type has a definition of its own, so repeating its description at every use
+    // site would be noise. It belongs on the definition.
+    properties["referenceToDescribedType"] as JsonObject shouldNotContainKey "description"
+
+    val referenced = schema.definitions["DescribedInnerDto"] as JsonObject
+    (referenced["description"] as JsonPrimitive).content shouldBe
+        "An inner object that describes itself."
+  }
+
+  @Test
+  fun `renders a class description on an enum definition`() {
+    val schema = schemaCreator.toSchema(DescribedEnumContainerDto.example)
+
+    val definition = schema.definitions["DescribedEnum"] as JsonObject
+    (definition["description"] as JsonPrimitive).content shouldBe "Which system owns the record."
+    (definition["type"] as JsonPrimitive).content shouldBe "string"
+  }
+
+  @Test
+  fun `renders description for the get use-site target`() {
+    val schema = schemaCreator.toSchema(GetterDescribedDto.example)
+    val definition = schema.definitions["GetterDescribedDto"]
+
+    descriptionOf(definition, "viaGetter") shouldBe "Described through the getter."
+    ((definition as JsonObject)["properties"] as JsonObject)["plain"]
+        as JsonObject shouldNotContainKey "description"
+  }
+
+  @Test
+  fun `renders description for elements of a collection passed to toSchema`() {
+    // The entry point erases the element type to a star projection, so the owner class has to be
+    // recovered from its serialName before any property annotation is reachable.
+    val schema = schemaCreator.toSchema(listOf(DescribedFieldDto.example))
+
+    descriptionOf(schema.definitions["DescribedFieldDto"], "described") shouldBe
+        "What this field is for."
+  }
+
+  @Test
+  fun `ANYOF strategy renders description outside the anyOf branches`() {
+    val anyOfSchemaCreator =
+        KotlinxSerializationJsonSchemaCreator<JsonElement>(
+            json = KotlinxSerialization,
+            kotlinxJson = kotlinxJson,
+            nullableStrategy = NullableStrategy.ANYOF,
+        )
+    val schema = anyOfSchemaCreator.toSchema(DescribedFieldDto.example)
+
+    val properties =
+        (schema.definitions["DescribedFieldDto"] as JsonObject)["properties"] as JsonObject
+    val nullable = properties["describedNullable"] as JsonObject
+
+    (nullable["description"] as JsonPrimitive).content shouldBe "Nullable, and still described."
+    val branches = nullable["anyOf"] as JsonArray
+    branches.size shouldBe 2
+    for (branch in branches) {
+      (branch as JsonObject) shouldNotContainKey "description"
+    }
+  }
+
+  @Test
+  fun `ANYOF strategy does not copy a type description onto a nullable reference`() {
+    // The nullable $ref sits inside anyOf rather than at the top level. A check that only looked
+    // at the top level would read this as an inlined type and duplicate the definition's
+    // description onto every field holding one.
+    val anyOfSchemaCreator =
+        KotlinxSerializationJsonSchemaCreator<JsonElement>(
+            json = KotlinxSerialization,
+            kotlinxJson = kotlinxJson,
+            nullableStrategy = NullableStrategy.ANYOF,
+        )
+    val schema = anyOfSchemaCreator.toSchema(DescribedNullableRefDto.example)
+
+    val properties =
+        (schema.definitions["DescribedNullableRefDto"] as JsonObject)["properties"] as JsonObject
+    val inner = properties["inner"] as JsonObject
+
+    // Its own description survives.
+    (inner["description"] as JsonPrimitive).content shouldBe "Optional inner."
+    inner shouldContainKey "anyOf"
+
+    // This is the case that bites: DescribedInnerDto carries a description and is referenced
+    // through a nullable anyOf, so a top-level-only $ref check would inherit it here.
+    val describedInner = properties["describedInner"] as JsonObject
+    describedInner shouldContainKey "anyOf"
+    describedInner shouldNotContainKey "description"
+  }
+
+  @Test
+  fun `falls back to the type description for a nullable inlined type`() {
+    val schema = schemaCreator.toSchema(NullableDescribedTypeDto.example)
+
+    descriptionOf(schema.definitions["NullableDescribedTypeDto"], "code") shouldBe
+        "A location code, as the traffic systems write it."
+  }
 }
