@@ -90,10 +90,15 @@ Five source files total:
 5. `OpenApi3` assembles all schemas into the final document and calls
    `KotlinxOpenApi3Renderer.api(api)`, which delegates to `OpenApi3ApiRenderer` then
    **strips null fields** (http4k emits `"description": null` for unset descriptions,
-   which is invalid OpenAPI). Subtrees under `example` / `examples` are exempt: those
-   are payloads, not scaffolding, and a `null` in one is data — the value the endpoint
-   actually serializes for a nullable field. Stripping them produced examples that
-   omitted properties their own schema listed as `required`.
+   which is invalid OpenAPI). Two positions are exempt —
+   `requestBody.content.<media-type>.example` and
+   `responses.<status>.content.<media-type>.example` — the only places http4k writes
+   body examples. Those subtrees are payloads, not scaffolding, and a `null` in one is
+   data: the value the endpoint actually serializes for a nullable field. Stripping it
+   produced examples that omitted properties their own schema listed as `required`. The
+   exemption is decided by position in the document, not by key name, so a
+   `@Serializable` property called `example` under `components/schemas` is stripped like
+   any other structure.
 
 ## Sealed class handling
 
@@ -222,11 +227,17 @@ parses cleanly (no schema-validity bugs slip through).
 - **`null` description fields in OpenAPI.** http4k's `OpenApi3ApiRenderer` emits
   `"description": null` for unset descriptions, which trips strict OpenAPI parsers.
   `KotlinxOpenApi3Renderer.api()` recursively strips null object values from the
-  rendered tree before returning — everywhere except under `example` / `examples`,
+  rendered tree before returning — everywhere except the two body-example positions,
   where a `null` is payload data rather than scaffolding (see step 5 of the data flow
   above). The rendered document is therefore null-free outside example payloads, not
-  null-free everywhere.
-- **Preserved example nulls vs. nullable `$ref` schemas.** The `example` / `examples`
+  null-free everywhere. `isExamplePayload` anchors on the enclosing `requestBody` /
+  `responses` member rather than on the key name, so structure that happens to use the
+  name keeps being stripped — a DTO property called `example`, including one under a
+  definition named `content`, and the `summary` / `description` members of an Example
+  Object. The check fails closed: if http4k ever writes body examples somewhere else,
+  their nulls are stripped again, and the tests pinning both positions are what catches
+  the move.
+- **Preserved example nulls vs. nullable `$ref` schemas.** The example-payload
   exemption above keeps `null` in example payloads, but under the default
   `NullableStrategy.TYPE_ARRAY` a nullable `$ref` property renders as a plain `$ref`
   (see `wrapNullable` — there is no `type` field to merge `"null"` into). A DTO with a

@@ -21,7 +21,9 @@ import no.liflig.http4k.kotlinx.jsonschema.KotlinxSerializationJsonSchemaCreator
 import org.http4k.contract.contract
 import org.http4k.contract.meta
 import org.http4k.contract.openapi.ApiInfo
+import org.http4k.contract.openapi.v3.Api
 import org.http4k.contract.openapi.v3.ApiServer
+import org.http4k.contract.openapi.v3.Components
 import org.http4k.core.Body
 import org.http4k.core.Method.GET
 import org.http4k.core.Method.POST
@@ -115,6 +117,13 @@ class KotlinxOpenApi3RendererTest {
   data class OverridesDto(
       val overriddenName: String?,
       val overriddenCount: Int?,
+  )
+
+  /** Carries a property whose name collides with the `example` key of a media-type object. */
+  @Serializable
+  data class ExampleNamedFieldDto(
+      val example: String?,
+      val label: String,
   )
 
   private val json = KotlinxSerialization
@@ -365,6 +374,151 @@ class KotlinxOpenApi3RendererTest {
     // The whole point of stripNullValues: http4k emits "description": null for unset descriptions,
     // which is invalid OpenAPI. Preserving example payloads must not bring those back.
     fetchSpec(app).toString() shouldNotContain "null"
+  }
+
+  @Test
+  fun `nulls under a schema property named example are stripped`() {
+    val renderer = KotlinxOpenApi3Renderer(json = json, schema = schema)
+
+    // A DTO property called "example" lands in components/schemas, where it is document structure
+    // rather than an example payload. The exemption keys off position, so this subtree is stripped
+    // like any other. Under a definition named "content" the property also completes a trailing
+    // content.<any>.example match, which is why the check anchors on requestBody / responses.
+    // Built by hand because the schema creator never emits nulls of its own.
+    val definitionIds = listOf("ConfigDto", "content")
+    val schemas =
+        json.obj(
+            definitionIds.map { definitionId ->
+              definitionId to
+                  json.obj(
+                      "type" to json.string("object"),
+                      "properties" to
+                          json.obj(
+                              "example" to
+                                  json.obj(
+                                      "type" to json.string("string"),
+                                      "description" to json.nullNode(),
+                                  ),
+                          ),
+                  )
+            },
+        )
+
+    val document =
+        renderer.api(
+            Api(
+                info = ApiInfo("Test API", "1.0.0"),
+                tags = emptyList(),
+                paths = emptyMap(),
+                components = Components(schemas = schemas, securitySchemes = json.obj()),
+                servers = listOf(ApiServer(Uri.of("http://localhost:8080"))),
+                webhooks = null,
+                openapi = "3.1.0",
+            ),
+        )
+
+    definitionIds.forEach { definitionId ->
+      val property =
+          document.jsonObject["components"]
+              ?.jsonObject
+              ?.get("schemas")
+              ?.jsonObject
+              ?.get(definitionId)
+              ?.jsonObject
+              ?.get("properties")
+              ?.jsonObject
+              ?.get("example")
+              ?.jsonObject
+      property.shouldNotBeNull()
+      property shouldNotContainKey "description"
+      property["type"]?.jsonPrimitive?.content shouldBe "string"
+    }
+  }
+
+  @Test
+  fun `null values in a request example are preserved`() {
+    val requestLens = Body.auto<OverridesDto>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/overrides" meta
+              {
+                summary = "Create overrides"
+                receiving(requestLens to OverridesDto(overriddenName = null, overriddenCount = 3))
+              } bindContract
+              POST to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val spec = fetchSpec(app)
+
+    // Request bodies sit at requestBody.content.<media-type>.example rather than under responses,
+    // and are exempt from the strip for the same reason.
+    val example =
+        spec["paths"]
+            ?.jsonObject
+            ?.get("/overrides")
+            ?.jsonObject
+            ?.get("post")
+            ?.jsonObject
+            ?.get("requestBody")
+            ?.jsonObject
+            ?.get("content")
+            ?.jsonObject
+            ?.values
+            ?.first()
+            ?.jsonObject
+            ?.get("example")
+            ?.jsonObject
+    example.shouldNotBeNull()
+    example["overriddenName"] shouldBe JsonNull
+    example["overriddenCount"]?.jsonPrimitive?.content shouldBe "3"
+  }
+
+  @Test
+  fun `a payload property named example does not confuse the example exemption`() {
+    val responseLens = Body.auto<ExampleNamedFieldDto>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/example-named" meta
+              {
+                summary = "Property named example"
+                returning(OK, responseLens to ExampleNamedFieldDto(example = null, label = "x"))
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val spec = fetchSpec(app)
+
+    // Inside the payload the key is data, so its null survives — the position under
+    // content.<media-type>.example decides, not the name of the property it holds.
+    val example =
+        spec["paths"]
+            ?.jsonObject
+            ?.get("/example-named")
+            ?.jsonObject
+            ?.get("get")
+            ?.jsonObject
+            ?.get("responses")
+            ?.jsonObject
+            ?.get("200")
+            ?.jsonObject
+            ?.get("content")
+            ?.jsonObject
+            ?.values
+            ?.first()
+            ?.jsonObject
+            ?.get("example")
+            ?.jsonObject
+    example.shouldNotBeNull()
+    example["example"] shouldBe JsonNull
+    example["label"]?.jsonPrimitive?.content shouldBe "x"
   }
 
   @Test
