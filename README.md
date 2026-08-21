@@ -368,6 +368,24 @@ A property with none of the three carries no `description` key at all.
 
 `@get:Description` works for the use-site form, as with `@Deprecated`. An annotation is needed rather than KDoc because KDoc does not survive compilation — and because KDoc is written for maintainers, which is not the same audience as the API's consumers.
 
+#### `@Description` and KDoc side by side
+
+That difference in audience is worth making the rule, rather than letting the two drift into saying the same thing twice:
+
+- **`@Description`** carries everything a consumer of the API needs. It is the primary, and it is what ships.
+- **KDoc** carries only what a *maintainer* needs and a consumer does not: invariants, why the field exists, gotchas, cross-links to related declarations.
+- A property with nothing maintainer-specific to say gets no KDoc. Restating the description is how the two start to disagree.
+
+```kotlin
+/** See [trains] for the raw chain this is derived from. */
+@Description("The cleaned view of `trains`: overlapping stops between adjacent trains merged away and cancelled stops filtered out.")
+val cleanedTrains: List<RuteplanTrainDto>,
+```
+
+The cross-link is real maintainer value that an annotation cannot express — KDoc resolves `[trains]`, an annotation argument is plain text. That asymmetry is also why the two can never be quite the same string, and so why keeping both in sync by hand is a losing game: prefer a short KDoc that points, over one that repeats.
+
+Deciding by audience rather than by "avoid duplication" answers the awkward case too. When a fact serves both readers, it belongs in `@Description` and KDoc stays quiet.
+
 ### Inline value classes
 
 Kotlinx-serialization's compiler plugin generates a `descriptor.isInline = true` descriptor for `@JvmInline value class X(val value: Y)`. The schema creator unwraps these: the schema for `X` is the schema for `Y`. This matters for Liflig services that use inline value classes for type-safe IDs:
