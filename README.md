@@ -366,6 +366,30 @@ A property with none of the three carries no `description` key at all.
 }
 ```
 
+Sealed hierarchies follow the same rule, and both levels are described independently: the base's description lands on the definition holding `oneOf` and `discriminator`, and each subclass's on its own definition. A subclass reads the same whether it is reached through its base or referenced directly.
+
+```kotlin
+@Description("The lifecycle state of an import.")
+@Serializable
+sealed class ImportState {
+  @Description("The import finished without errors.")
+  @Serializable @SerialName("completed") data class Completed(val at: Instant) : ImportState()
+}
+```
+
+```json
+"ImportState": {
+  "description": "The lifecycle state of an import.",
+  "oneOf": [{ "$ref": "#/components/schemas/Completed" }],
+  "discriminator": { "propertyName": "type", "mapping": { "completed": "#/components/schemas/Completed" } }
+},
+"Completed": {
+  "description": "The import finished without errors.",
+  "type": "object",
+  "properties": { "type": { "type": "string", "enum": ["completed"] }, "at": { "type": "string", "format": "date-time" } }
+}
+```
+
 `@get:Description` works for the use-site form, as with `@Deprecated`. An annotation is needed rather than KDoc because KDoc does not survive compilation — and because KDoc is written for maintainers, which is not the same audience as the API's consumers.
 
 #### `@Description` and KDoc side by side

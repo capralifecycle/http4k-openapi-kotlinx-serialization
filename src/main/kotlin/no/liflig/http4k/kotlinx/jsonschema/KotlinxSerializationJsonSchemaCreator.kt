@@ -908,7 +908,8 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
         schemaFields.add("required" to json.array(requiredFields.map { json.string(it) }))
       }
 
-      val subclassSchema = json.obj(schemaFields)
+      val subclassSchema =
+          withClassDescription(json.obj(schemaFields), subclassKClasses[discriminatorValue])
 
       // Use the subclass's qualified class name (not the @SerialName discriminator value)
       // as the identity passed to addDefinition. The discriminator value can be reused
@@ -934,14 +935,17 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
     val parentQualifiedName = sealedKClass.qualifiedName ?: serialName
     val parentShortName = sealedKClass.simpleName ?: serialName.substringAfterLast('.')
     val parentSchema =
-        json.obj(
-            "oneOf" to json.array(oneOfRefs),
-            "discriminator" to
-                json.obj(
-                    "propertyName" to json.string(classDiscriminator),
-                    "mapping" to
-                        json.obj(discriminatorMapping.map { (k, v) -> k to json.string(v) }),
-                ),
+        withClassDescription(
+            json.obj(
+                "oneOf" to json.array(oneOfRefs),
+                "discriminator" to
+                    json.obj(
+                        "propertyName" to json.string(classDiscriminator),
+                        "mapping" to
+                            json.obj(discriminatorMapping.map { (k, v) -> k to json.string(v) }),
+                    ),
+            ),
+            sealedKClass,
         )
 
     val parentDefName =

@@ -845,3 +845,43 @@ data class NullableDescribedTypeDto(val code: DescribedCode?) {
     val example = NullableDescribedTypeDto(DescribedCode("NO203"))
   }
 }
+
+// --- @Description on a sealed hierarchy: base, subclasses, and both ways in ---
+
+@Description("The lifecycle state of an import.")
+@Serializable
+sealed class DescribedSealedBase {
+  @Description("The import finished without errors.")
+  @Serializable
+  @SerialName("described_completed")
+  data class DescribedCompleted(@Description("When the import finished.") val at: String) :
+      DescribedSealedBase() {
+    companion object {
+      val example = DescribedCompleted("2026-08-25T10:00:00Z")
+    }
+  }
+
+  /** Undescribed on purpose: its definition carries no `description`. */
+  @Serializable
+  @SerialName("described_pending")
+  data class DescribedPending(val queuePosition: Int) : DescribedSealedBase() {
+    companion object {
+      val example = DescribedPending(3)
+    }
+  }
+}
+
+@Serializable
+data class DescribedSealedContainerDto(val state: DescribedSealedBase) {
+  companion object {
+    val example = DescribedSealedContainerDto(DescribedSealedBase.DescribedCompleted.example)
+  }
+}
+
+/** Reaches a described subclass directly rather than through its base. */
+@Serializable
+data class DescribedSubclassDirectDto(val completed: DescribedSealedBase.DescribedCompleted) {
+  companion object {
+    val example = DescribedSubclassDirectDto(DescribedSealedBase.DescribedCompleted.example)
+  }
+}

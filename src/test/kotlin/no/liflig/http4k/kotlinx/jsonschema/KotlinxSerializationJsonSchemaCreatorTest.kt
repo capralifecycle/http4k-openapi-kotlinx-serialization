@@ -1286,4 +1286,52 @@ class KotlinxSerializationJsonSchemaCreatorTest {
     descriptionOf(schema.definitions["NullableDescribedTypeDto"], "code") shouldBe
         "A location code, as the traffic systems write it."
   }
+
+  @Test
+  fun `renders a class description on a sealed base definition`() {
+    val schema = schemaCreator.toSchema(DescribedSealedContainerDto.example)
+
+    val parent = schema.definitions["DescribedSealedBase"] as JsonObject
+    (parent["description"] as JsonPrimitive).content shouldBe "The lifecycle state of an import."
+
+    // The description joins the polymorphic keys rather than displacing them.
+    parent shouldContainKey "oneOf"
+    parent shouldContainKey "discriminator"
+  }
+
+  @Test
+  fun `renders a class description on a sealed subclass definition`() {
+    val schema = schemaCreator.toSchema(DescribedSealedContainerDto.example)
+
+    val completed = schema.definitions["DescribedCompleted"] as JsonObject
+    (completed["description"] as JsonPrimitive).content shouldBe
+        "The import finished without errors."
+    descriptionOf(completed, "at") shouldBe "When the import finished."
+
+    // A sibling subclass in the same hierarchy is left alone.
+    schema.definitions["DescribedPending"] as JsonObject shouldNotContainKey "description"
+  }
+
+  @Test
+  fun `describes a sealed subclass the same reached directly or through its base`() {
+    val throughBase = schemaCreator.toSchema(DescribedSealedContainerDto.example)
+    val directly = schemaCreator.toSchema(DescribedSubclassDirectDto.example)
+
+    // The two paths key the definition differently — the sealed walk names it after the Kotlin
+    // class, the direct walk after @SerialName — which predates descriptions and is left alone
+    // here. What must agree is the description itself.
+    val fromBase = (throughBase.definitions["DescribedCompleted"] as JsonObject)["description"]
+    val fromDirect = (directly.definitions["described_completed"] as JsonObject)["description"]
+
+    fromDirect shouldBe fromBase
+    (fromDirect as JsonPrimitive).content shouldBe "The import finished without errors."
+  }
+
+  @Test
+  fun `does not copy a sealed base description onto properties that reference it`() {
+    val schema = schemaCreator.toSchema(DescribedSealedContainerDto.example)
+
+    // The base owns a definition, so its description belongs there and nowhere else.
+    descriptionOf(schema.definitions["DescribedSealedContainerDto"], "state") shouldBe null
+  }
 }
