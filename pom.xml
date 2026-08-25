@@ -11,8 +11,17 @@
   </parent>
 
   <groupId>no.liflig</groupId>
-  <artifactId>http4k-openapi-kotlinx-serialization</artifactId>
+  <artifactId>http4k-openapi-kotlinx-serialization-parent</artifactId>
   <version>${revision}</version>
+  <packaging>pom</packaging>
+
+  <!-- annotations carries @Description alone, with no dependencies, so a pure domain-types
+       library can be annotated without taking http4k onto its compile path. core depends on
+       it at compile scope, so consumers of the main artifact see no difference. -->
+  <modules>
+    <module>annotations</module>
+    <module>core</module>
+  </modules>
 
   <properties>
     <major-version>1</major-version>
@@ -41,60 +50,6 @@
       </dependency>
     </dependencies>
   </dependencyManagement>
-
-  <dependencies>
-    <!-- API dependencies -->
-    <dependency>
-      <groupId>org.http4k</groupId>
-      <artifactId>http4k-format-core</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.http4k</groupId>
-      <artifactId>http4k-api-jsonschema</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.http4k</groupId>
-      <artifactId>http4k-api-openapi</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.jetbrains.kotlinx</groupId>
-      <artifactId>kotlinx-serialization-json</artifactId>
-      <version>${kotlinx-serialization.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.jetbrains.kotlin</groupId>
-      <artifactId>kotlin-reflect</artifactId>
-    </dependency>
-
-    <!-- Test dependencies -->
-    <dependency>
-      <groupId>org.jetbrains.kotlin</groupId>
-      <artifactId>kotlin-test-junit5</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.http4k</groupId>
-      <artifactId>http4k-format-kotlinx-serialization</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>io.kotest</groupId>
-      <artifactId>kotest-assertions-core-jvm</artifactId>
-      <version>${kotest.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>io.swagger.parser.v3</groupId>
-      <artifactId>swagger-parser</artifactId>
-      <version>2.1.46</version>
-      <scope>test</scope>
-    </dependency>
-  </dependencies>
 
   <build>
     <plugins>
