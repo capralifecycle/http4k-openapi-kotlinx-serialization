@@ -29,19 +29,6 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
         DefaultSealedClassExampleProvider(),
     private val formatMappings: Map<String, String> = emptyMap(),
     private val nullableStrategy: NullableStrategy = NullableStrategy.TYPE_ARRAY,
-    /**
-     * Whether a property's [Deprecated] message is appended to its `description`.
-     *
-     * Off by default, and deliberately: `@Deprecated` messages already exist throughout every
-     * service, and they are written for Kotlin callers rather than for API consumers — "Legacy from
-     * the 2019 import, ask before touching" is as likely as "Use originPlc instead". Defaulting
-     * this on would turn a routine version bump into a change in what a service publishes, which is
-     * not something anyone reviews a dependency update expecting.
-     *
-     * Turn it on where the messages are known to read well to a consumer. `"deprecated": true` is
-     * rendered either way; this only governs the prose.
-     */
-    private val includeDeprecationMessages: Boolean = false,
 ) : JsonSchemaCreator<Any, NODE> {
 
   companion object {
@@ -572,14 +559,8 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
       json.obj(json.fields(schema).toList() + ("description" to json.string(description)))
 
   /**
-   * The description for a property: what the field is, plus what to use instead when it is
-   * deprecated.
-   *
-   * What the field is comes from its own [Description] or, failing that, its declared type's — two
-   * answers to the same question, so the more specific one wins. A deprecation message answers a
-   * different question, so it is *appended* rather than competing: a property that gained a
-   * description would otherwise silently lose its migration hint, which turns writing documentation
-   * into deleting documentation.
+   * The description for a property: its own [Description], or failing that the one on its declared
+   * type.
    *
    * The type-level fallback applies only where [schema] renders the type inlined — a value class,
    * or one whose custom serializer produces a primitive. Those have no definition of their own to
@@ -593,46 +574,20 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
   private fun descriptionOf(property: KProperty1<*, *>?, schema: NODE): String? {
     if (property == null) return null
 
-    val whatItIs =
+    val onProperty =
         (property.annotations + property.getter.annotations)
             .filterIsInstance<Description>()
             .firstOrNull()
-            ?.value
-            ?: property.returnType.classifier
-                .takeIf { !rendersAsReference(schema) }
-                .let { descriptionOn(it as? KClass<*>) }
+    if (onProperty != null) return onProperty.value
 
-    // Blank line between them, so a markdown renderer treats the two as separate paragraphs. The
-    // message is appended verbatim, with no "Deprecated:" prefix: `"deprecated": true` sits in the
-    // same schema object and already says that, and inventing a prefix would put words the author
-    // did not write into a document their consumers read.
-    return listOfNotNull(whatItIs, deprecationMessageOf(property)).joinToString("\n\n").takeIf {
-      it.isNotEmpty()
+    if (!rendersAsReference(schema)) {
+      descriptionOn(property.returnType.classifier as? KClass<*>)?.let {
+        return it
+      }
     }
-  }
 
-  /**
-   * The message from a property's [Deprecated], when it carries one.
-   *
-   * A deprecation notice is the one description this library can produce without being asked: the
-   * annotation is already read to render `"deprecated": true`, and its message is the very thing a
-   * consumer seeing that marker needs — what to use instead. Discarding it would leave the document
-   * saying a field is deprecated and nothing more.
-   *
-   * Appended to whatever description the property already has rather than replacing or being
-   * replaced by it — see [descriptionOf].
-   *
-   * Blank messages are ignored: `@Deprecated("")` and the default carry nothing to say. Returns
-   * `null` altogether unless [includeDeprecationMessages] is on.
-   */
-  private fun deprecationMessageOf(property: KProperty1<*, *>): String? =
-      if (!includeDeprecationMessages) null
-      else
-          (property.annotations + property.getter.annotations)
-              .filterIsInstance<Deprecated>()
-              .firstOrNull()
-              ?.message
-              ?.takeIf { it.isNotBlank() }
+    return null
+  }
 
   /** The [Description] declared on [kClass], if any. */
   private fun descriptionOn(kClass: KClass<*>?): String? =

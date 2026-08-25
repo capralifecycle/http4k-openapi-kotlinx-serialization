@@ -290,7 +290,13 @@ Properties without the annotation carry no `deprecated` key at all, rather than 
 
 Only properties are marked. `@Deprecated` on a DTO class itself has no effect on the schema.
 
-The message can be published too, behind an opt-in flag — see [Field descriptions](#field-descriptions).
+**The marker is rendered; the message is not.** `"deprecated": true` is a fact about the API, so it is derived automatically. The message is prose written for Kotlin callers — *"Legacy from the 2019 import, ask before touching"* is as plausible as *"Use originPlc instead"*, and it names Kotlin properties rather than serialized field names. Migration guidance a consumer should read goes in [`@Description`](#field-descriptions), where someone has decided it is consumer-facing:
+
+```kotlin
+@Description("The journey's origin. Superseded by originPlc.")
+@Deprecated("Use originPlc instead")
+val originStop: PrimaryLocationCode
+```
 
 ### Field descriptions
 
@@ -304,48 +310,17 @@ The message can be published too, behind an opt-in flag — see [Field descripti
 data class TrainIdDto(
     @Description("The train number as the traffic systems report it.") val trainNumber: String,
     val nominalDate: NominalDate,
-    @Deprecated("Use nominalDate instead") val date: String,
 )
 ```
 
 ```json
 {
   "trainNumber": { "type": "string", "description": "The train number as the traffic systems report it." },
-  "nominalDate": { "type": "string", "format": "date", "description": "Planned departure date from route origin, per the route plan." },
-  "date": { "type": "string", "deprecated": true, "description": "Use nominalDate instead" }
+  "nominalDate": { "type": "string", "format": "date", "description": "Planned departure date from route origin, per the route plan." }
 }
 ```
 
-A property's description is **what the field is, plus what to use instead if it is going away**:
-
-- *What it is* comes from its own `@Description`, or failing that its type's. Two answers to the same question, so the more specific one wins.
-- *What to use instead* comes from `@Deprecated`, **when `includeDeprecationMessages` is on**, and is **appended** rather than competing — a blank line between them, so markdown renders two paragraphs.
-
-```kotlin
-KotlinxSerializationJsonSchemaCreator(
-    json = KotlinxSerialization,
-    kotlinxJson = kotlinxJson,
-    includeDeprecationMessages = true,
-)
-```
-
-**This one is off by default, unlike everything else here.** `@Deprecated` messages already exist throughout a codebase and are written for Kotlin callers, not API consumers — "Legacy from the 2019 import, ask before touching" is as plausible as "Use originPlc instead". Publishing them on by default would mean a routine version bump changed what a service exposes, which is not something anyone reviews a dependency update expecting. Turn it on where the messages are known to read well to an outside reader. `"deprecated": true` is rendered either way; the flag governs only the prose.
-
-The message is appended verbatim, with no `Deprecated:` prefix: `"deprecated": true` is right there in the same schema object, and a prefix would be the library putting words the author did not write into a document their consumers read.
-
-Appended rather than competing because the two answer different questions. Letting a description replace the deprecation message would mean that adding documentation to a deprecated property silently deleted its migration hint — improving the docs would make them worse.
-
-```json
-{
-  "originStop": {
-    "type": "string",
-    "deprecated": true,
-    "description": "The journey's origin, as a primary location code.\n\nUse originPlc instead"
-  }
-}
-```
-
-A property with none of the three carries no `description` key at all.
+Resolution order for a property: its own `@Description`, then its type's. Two answers to the same question, so the more specific one wins, and a property with neither carries no `description` key.
 
 **Where a type's description lands depends on how the type renders.** A type flattened into the property — an inline value class, or one whose custom serializer produces a primitive — has no definition of its own, so its description goes on each property holding it. A type rendered as `$ref` does have a definition, and its description goes there, once:
 
