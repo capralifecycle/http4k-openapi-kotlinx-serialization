@@ -101,6 +101,22 @@ Add the dependency to your `pom.xml`:
 
 You also need http4k's OpenAPI and kotlinx.serialization dependencies. See the project's `pom.xml` for the full list.
 
+### Annotating types in a library that shouldn't depend on http4k
+
+`@Description` is most useful on shared vocabulary types — a `TrainNumber` or a `NominalDate` described once, rather than at every field holding it. Those types usually live in a domain-types library that has no business depending on http4k.
+
+For that case, depend on the annotations artifact alone. It carries `@Description` and nothing else, and pulls in no dependencies beyond `kotlin-stdlib`:
+
+```xml
+<dependency>
+  <groupId>no.liflig</groupId>
+  <artifactId>http4k-openapi-kotlinx-serialization-annotations</artifactId>
+  <version>${http4k-openapi-kotlinx-serialization.version}</version>
+</dependency>
+```
+
+The main artifact depends on it at compile scope, so a service that already has `http4k-openapi-kotlinx-serialization` needs no second entry — the annotation is on its classpath either way, under the same `no.liflig.http4k.kotlinx.jsonschema` package.
+
 ## Integration
 
 ### Recommended: `openApi3WithKotlinx` helper

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>no.liflig</groupId>
+    <artifactId>http4k-openapi-kotlinx-serialization-parent</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <!-- Unchanged from before the split into modules, so existing consumers need no edit. -->
+  <artifactId>http4k-openapi-kotlinx-serialization</artifactId>
+
+  <dependencies>
+    <dependency>
+      <groupId>no.liflig</groupId>
+      <artifactId>http4k-openapi-kotlinx-serialization-annotations</artifactId>
+      <version>${revision}</version>
+    </dependency>
+
+    <!-- API dependencies -->
+    <dependency>
+      <groupId>org.http4k</groupId>
+      <artifactId>http4k-format-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.http4k</groupId>
+      <artifactId>http4k-api-jsonschema</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.http4k</groupId>
+      <artifactId>http4k-api-openapi</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.jetbrains.kotlinx</groupId>
+      <artifactId>kotlinx-serialization-json</artifactId>
+      <version>${kotlinx-serialization.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-reflect</artifactId>
+    </dependency>
+
+    <!-- Test dependencies -->
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-test-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.http4k</groupId>
+      <artifactId>http4k-format-kotlinx-serialization</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.kotest</groupId>
+      <artifactId>kotest-assertions-core-jvm</artifactId>
+      <version>${kotest.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.swagger.parser.v3</groupId>
+      <artifactId>swagger-parser</artifactId>
+      <version>2.1.46</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+</project>

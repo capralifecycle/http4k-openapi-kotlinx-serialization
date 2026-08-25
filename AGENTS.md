@@ -14,16 +14,25 @@ kotlinx.serialization `SerialDescriptor` trees instead of Jackson reflection.
 
 ## Source layout
 
+Two published modules. `annotations` holds `@Description` alone and **must stay
+dependency-free** — that is the whole point of it, so a library of pure domain types can
+annotate its value classes without taking http4k onto its compile path. `core` keeps the
+`http4k-openapi-kotlinx-serialization` coordinates and depends on `annotations` at compile
+scope, so consumers of the main artifact see no difference. Both share the package
+`no.liflig.http4k.kotlinx.jsonschema`, which keeps every existing import working; the repo
+has no `module-info.java`, so the split package is a classpath detail only.
+
 | File                                                                                  | What                                                              |
 | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinxSerializationJsonSchemaCreator.kt` | Core schema walker. Implements `JsonSchemaCreator<Any, NODE>`.    |
-| `src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/SealedClassExampleProvider.kt`   | `companion.example` discovery for sealed subclasses.              |
-| `src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/NullableStrategy.kt`             | `TYPE_ARRAY` (default) vs `ANYOF`.                                |
-| `src/main/kotlin/no/liflig/http4k/kotlinx/openapi/KotlinxOpenApi3Renderer.kt`         | `ApiRenderer` with NODE → kotlinx → Java-Enum fallback chain.     |
-| `src/main/kotlin/no/liflig/http4k/kotlinx/openapi/OpenApi3WithKotlinx.kt`             | `openApi3WithKotlinx(...)` factory, wraps the renderer in `cached()`. |
-| `src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/TestDtos.kt`                     | Test DTOs covering primitives, nullables, sealed classes, maps.   |
-| `src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinxSerializationJsonSchemaCreatorTest.kt` | Approval tests; uses `swagger-parser` to validate rendered output. |
-| `src/test/kotlin/no/liflig/http4k/kotlinx/openapi/KotlinxOpenApi3RendererTest.kt`     | End-to-end renderer test (`openApi3WithKotlinx`).                 |
+| `annotations/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/Description.kt` | `@Description`. No dependencies — keep it that way.               |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinxSerializationJsonSchemaCreator.kt` | Core schema walker. Implements `JsonSchemaCreator<Any, NODE>`.    |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/SealedClassExampleProvider.kt`   | `companion.example` discovery for sealed subclasses.              |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/NullableStrategy.kt`             | `TYPE_ARRAY` (default) vs `ANYOF`.                                |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/openapi/KotlinxOpenApi3Renderer.kt`         | `ApiRenderer` with NODE → kotlinx → Java-Enum fallback chain.     |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/openapi/OpenApi3WithKotlinx.kt`             | `openApi3WithKotlinx(...)` factory, wraps the renderer in `cached()`. |
+| `core/src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/TestDtos.kt`                     | Test DTOs covering primitives, nullables, sealed classes, maps.   |
+| `core/src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinxSerializationJsonSchemaCreatorTest.kt` | Approval tests; uses `swagger-parser` to validate rendered output. |
+| `core/src/test/kotlin/no/liflig/http4k/kotlinx/openapi/KotlinxOpenApi3RendererTest.kt`     | End-to-end renderer test (`openApi3WithKotlinx`).                 |
 
 ## Build & test
 
@@ -50,7 +59,7 @@ property bump.
   generation) and `openapi` (http4k renderer adapter). Don't introduce `common/` for a
   five-file library.
 - **No Jackson.** This library exists to remove Jackson from the OpenAPI rendering path.
-  Don't import `com.fasterxml.jackson.*` anywhere in `src/main/`.
+  Don't import `com.fasterxml.jackson.*` anywhere in `core/src/main/`.
 - **Test DTOs live in `TestDtos.kt`.** Add new variants there rather than defining
   one-off `@Serializable` classes inside test methods — the approval tests rely on a
   shared, stable set.

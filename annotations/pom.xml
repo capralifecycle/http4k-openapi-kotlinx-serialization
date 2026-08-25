@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>no.liflig</groupId>
+    <artifactId>http4k-openapi-kotlinx-serialization-parent</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>http4k-openapi-kotlinx-serialization-annotations</artifactId>
+
+  <!--
+    Deliberately has no dependencies, and must keep none.
+
+    The point of this module is that a library of pure domain types can annotate its value classes
+    without taking http4k, kotlin-reflect or a serialization runtime onto its compile path. Adding
+    a dependency here removes the only reason the module exists - annotate a type in the module
+    that reads the annotation instead.
+
+    Only kotlin-stdlib arrives, inherited from the parent chain.
+  -->
+</project>
