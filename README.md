@@ -1,6 +1,6 @@
 # http4k-openapi-kotlinx-serialization
 
-OpenAPI schema generation for http4k contract endpoints using kotlinx.serialization descriptors instead of reflection.
+OpenAPI schema generation for http4k contract endpoints driven by kotlinx.serialization descriptors rather than Jackson reflection.
 
 ## Why This Exists
 
@@ -289,6 +289,101 @@ data class JourneyDto(
 Properties without the annotation carry no `deprecated` key at all, rather than `"deprecated": false`. The marker is placed on the property's outer schema in every shape — alongside `type` for primitives, as a sibling of `$ref` for reference types (legal in OpenAPI 3.1 / JSON Schema 2020-12), and outside the branches under `NullableStrategy.ANYOF`.
 
 Only properties are marked. `@Deprecated` on a DTO class itself has no effect on the schema.
+
+**The marker is rendered; the message is not.** `"deprecated": true` is a fact about the API, so it is derived automatically. The message is prose written for Kotlin callers — *"Legacy from the 2019 import, ask before touching"* is as plausible as *"Use originPlc instead"*, and it names Kotlin properties rather than serialized field names. Migration guidance a consumer should read goes in [`@Description`](#field-descriptions), where someone has decided it is consumer-facing:
+
+```kotlin
+@Description("The journey's origin. Superseded by originPlc.")
+@Deprecated("Use originPlc instead")
+val originStop: PrimaryLocationCode
+```
+
+### Field descriptions
+
+`@Description` renders as `"description"`. It goes on a property, or on a type — a type's description applies to every use of it, which is how a shared vocabulary type gets described once rather than at each field holding it.
+
+```kotlin
+@Description("Planned departure date from route origin, per the route plan.")
+@Serializable @JvmInline value class NominalDate(val value: LocalDate)
+
+@Serializable
+data class TrainIdDto(
+    @Description("The train number as the traffic systems report it.") val trainNumber: String,
+    val nominalDate: NominalDate,
+)
+```
+
+```json
+{
+  "trainNumber": { "type": "string", "description": "The train number as the traffic systems report it." },
+  "nominalDate": { "type": "string", "format": "date", "description": "Planned departure date from route origin, per the route plan." }
+}
+```
+
+Resolution order for a property: its own `@Description`, then its type's. Two answers to the same question, so the more specific one wins, and a property with neither carries no `description` key.
+
+**Where a type's description lands depends on how the type renders.** A type flattened into the property — an inline value class, or one whose custom serializer produces a primitive — has no definition of its own, so its description goes on each property holding it. A type rendered as `$ref` does have a definition, and its description goes there, once:
+
+```kotlin
+@Description("Which system owns the train at a given time.")
+@Serializable enum class ResponsibleSystem { GTS, CONNECT }
+```
+
+```json
+"components": {
+  "schemas": {
+    "ResponsibleSystem": {
+      "description": "Which system owns the train at a given time.",
+      "type": "string",
+      "enum": ["GTS", "CONNECT"]
+    }
+  }
+}
+```
+
+Sealed hierarchies follow the same rule, and both levels are described independently: the base's description lands on the definition holding `oneOf` and `discriminator`, and each subclass's on its own definition. A subclass reads the same whether it is reached through its base or referenced directly.
+
+```kotlin
+@Description("The lifecycle state of an import.")
+@Serializable
+sealed class ImportState {
+  @Description("The import finished without errors.")
+  @Serializable @SerialName("completed") data class Completed(val at: Instant) : ImportState()
+}
+```
+
+```json
+"ImportState": {
+  "description": "The lifecycle state of an import.",
+  "oneOf": [{ "$ref": "#/components/schemas/Completed" }],
+  "discriminator": { "propertyName": "type", "mapping": { "completed": "#/components/schemas/Completed" } }
+},
+"Completed": {
+  "description": "The import finished without errors.",
+  "type": "object",
+  "properties": { "type": { "type": "string", "enum": ["completed"] }, "at": { "type": "string", "format": "date-time" } }
+}
+```
+
+`@get:Description` works for the use-site form, as with `@Deprecated`. An annotation is needed rather than KDoc because KDoc does not survive compilation — and because KDoc is written for maintainers, which is not the same audience as the API's consumers.
+
+#### `@Description` and KDoc side by side
+
+That difference in audience is worth making the rule, rather than letting the two drift into saying the same thing twice:
+
+- **`@Description`** carries everything a consumer of the API needs. It is the primary, and it is what ships.
+- **KDoc** carries only what a *maintainer* needs and a consumer does not: invariants, why the field exists, gotchas, cross-links to related declarations.
+- A property with nothing maintainer-specific to say gets no KDoc. Restating the description is how the two start to disagree.
+
+```kotlin
+/** See [trains] for the raw chain this is derived from. */
+@Description("The cleaned view of `trains`: overlapping stops between adjacent trains merged away and cancelled stops filtered out.")
+val cleanedTrains: List<RuteplanTrainDto>,
+```
+
+The cross-link is real maintainer value that an annotation cannot express — KDoc resolves `[trains]`, an annotation argument is plain text. That asymmetry is also why the two can never be quite the same string, and so why keeping both in sync by hand is a losing game: prefer a short KDoc that points, over one that repeats.
+
+Deciding by audience rather than by "avoid duplication" answers the awkward case too. When a fact serves both readers, it belongs in `@Description` and KDoc stays quiet.
 
 ### Inline value classes
 

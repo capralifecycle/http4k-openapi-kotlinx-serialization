@@ -732,3 +732,132 @@ data class DeprecatedFieldDto(
         )
   }
 }
+
+// --- @Description on properties, on types, and alongside @Deprecated ---
+
+@Description("A location code, as the traffic systems write it.")
+@Serializable
+@JvmInline
+value class DescribedCode(val value: String)
+
+@Description("Which system owns the record.")
+@Serializable
+enum class DescribedEnum {
+  FIRST,
+  SECOND,
+}
+
+@Description("An inner object that describes itself.")
+@Serializable
+data class DescribedInnerDto(val field: String) {
+  companion object {
+    val example = DescribedInnerDto("inner")
+  }
+}
+
+@Serializable
+data class DescribedFieldDto(
+    @Description("What this field is for.") val described: String,
+    val undescribed: String,
+    @Description("Nullable, and still described.") val describedNullable: String?,
+    @Description("Described alongside a reference.") val describedInner: InnerDto,
+    @Description("Described under a different serialized name.")
+    @SerialName("described_renamed")
+    val describedRenamed: String,
+    /** Description comes from [DescribedCode], since the property declares none. */
+    val fromType: DescribedCode,
+    @Description("The property wins over the type's own description.")
+    val overridesType: DescribedCode,
+    /** A reference carries no inherited description — [DescribedInnerDto] holds its own. */
+    val referenceToDescribedType: DescribedInnerDto,
+) {
+  companion object {
+    val example =
+        DescribedFieldDto(
+            described = "a",
+            undescribed = "b",
+            describedNullable = "c",
+            describedInner = InnerDto.example,
+            describedRenamed = "d",
+            fromType = DescribedCode("NO201"),
+            overridesType = DescribedCode("NO202"),
+            referenceToDescribedType = DescribedInnerDto.example,
+        )
+  }
+}
+
+@Serializable
+data class DescribedEnumContainerDto(val system: DescribedEnum) {
+  companion object {
+    val example = DescribedEnumContainerDto(DescribedEnum.FIRST)
+  }
+}
+
+@Suppress("DEPRECATION")
+@Serializable
+data class GetterDescribedDto(
+    @get:Description("Described through the getter.") val viaGetter: String,
+    val plain: String,
+) {
+  companion object {
+    val example = GetterDescribedDto("a", "b")
+  }
+}
+
+@Serializable
+data class DescribedNullableRefDto(
+    @Description("Optional inner.") val inner: InnerDto?,
+    /** Nullable reference to a *described* type — nothing should be inherited from it. */
+    val describedInner: DescribedInnerDto?,
+) {
+  companion object {
+    val example = DescribedNullableRefDto(InnerDto.example, DescribedInnerDto.example)
+  }
+}
+
+@Serializable
+data class NullableDescribedTypeDto(val code: DescribedCode?) {
+  companion object {
+    val example = NullableDescribedTypeDto(DescribedCode("NO203"))
+  }
+}
+
+// --- @Description on a sealed hierarchy: base, subclasses, and both ways in ---
+
+@Description("The lifecycle state of an import.")
+@Serializable
+sealed class DescribedSealedBase {
+  @Description("The import finished without errors.")
+  @Serializable
+  @SerialName("described_completed")
+  data class DescribedCompleted(@Description("When the import finished.") val at: String) :
+      DescribedSealedBase() {
+    companion object {
+      val example = DescribedCompleted("2026-08-25T10:00:00Z")
+    }
+  }
+
+  /** Undescribed on purpose: its definition carries no `description`. */
+  @Serializable
+  @SerialName("described_pending")
+  data class DescribedPending(val queuePosition: Int) : DescribedSealedBase() {
+    companion object {
+      val example = DescribedPending(3)
+    }
+  }
+}
+
+@Serializable
+data class DescribedSealedContainerDto(val state: DescribedSealedBase) {
+  companion object {
+    val example = DescribedSealedContainerDto(DescribedSealedBase.DescribedCompleted.example)
+  }
+}
+
+/** Reaches a described subclass directly rather than through its base. */
+@Serializable
+data class DescribedSubclassDirectDto(val completed: DescribedSealedBase.DescribedCompleted) {
+  companion object {
+    val example = DescribedSubclassDirectDto(DescribedSealedBase.DescribedCompleted.example)
+  }
+}

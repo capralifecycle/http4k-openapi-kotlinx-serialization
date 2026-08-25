@@ -75,6 +75,21 @@ class KotlinxOpenApi3RendererTest {
       val event: EventPayload,
   )
 
+  @no.liflig.http4k.kotlinx.jsonschema.Description("A code, as the traffic systems write it.")
+  @Serializable
+  @JvmInline
+  value class DescribedCodeDto(val value: String)
+
+  @Serializable
+  data class DescribedPropertyDto(
+      @no.liflig.http4k.kotlinx.jsonschema.Description("What this field is for.")
+      val described: String,
+      val undescribed: String,
+      val fromType: DescribedCodeDto,
+      @no.liflig.http4k.kotlinx.jsonschema.Description("Described alongside a reference.")
+      val describedEvent: EventPayload,
+  )
+
   @Suppress("DEPRECATION")
   @Serializable
   data class DeprecatedPropertyDto(
@@ -731,6 +746,60 @@ class KotlinxOpenApi3RendererTest {
     val legacyEvent = properties["legacyEvent"]?.jsonObject.shouldNotBeNull()
     legacyEvent["deprecated"]?.jsonPrimitive?.boolean shouldBe true
     legacyEvent["\$ref"]?.jsonPrimitive?.content.shouldNotBeNull()
+
+    val parseResult =
+        io.swagger.parser.OpenAPIParser().readContents(response.bodyString(), null, null)
+    parseResult.messages.orEmpty().shouldBeEmpty()
+  }
+
+  @Test
+  fun `descriptions survive rendering and validate as openapi 3_1`() {
+    val responseLens = Body.auto<DescribedPropertyDto>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/described" meta
+              {
+                summary = "Described properties"
+                returning(
+                    OK,
+                    responseLens to
+                        DescribedPropertyDto(
+                            "a",
+                            "b",
+                            DescribedCodeDto("NO201"),
+                            EventPayload.Created("x"),
+                        ),
+                )
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val response = app(Request(GET, "/"))
+    response.status.code shouldBe 200
+    val spec = KotlinxJson.parseToJsonElement(response.bodyString()).jsonObject
+
+    val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
+    val dto = schemas["DescribedPropertyDto"]?.jsonObject.shouldNotBeNull()
+    val properties = dto["properties"]?.jsonObject.shouldNotBeNull()
+
+    properties["described"]?.jsonObject?.get("description")?.jsonPrimitive?.content shouldBe
+        "What this field is for."
+    properties["undescribed"]?.jsonObject?.get("description") shouldBe null
+
+    // Inherited from the value class, which is flattened into the property and so has no
+    // definition of its own to carry it.
+    properties["fromType"]?.jsonObject?.get("description")?.jsonPrimitive?.content shouldBe
+        "A code, as the traffic systems write it."
+
+    // A $ref sibling must survive the null-stripping pass in KotlinxOpenApi3Renderer.api().
+    val describedEvent = properties["describedEvent"]?.jsonObject.shouldNotBeNull()
+    describedEvent["description"]?.jsonPrimitive?.content shouldBe
+        "Described alongside a reference."
+    describedEvent["\$ref"]?.jsonPrimitive?.content.shouldNotBeNull()
 
     val parseResult =
         io.swagger.parser.OpenAPIParser().readContents(response.bodyString(), null, null)
