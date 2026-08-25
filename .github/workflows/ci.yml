@@ -59,7 +59,10 @@ jobs:
       - name: resolve dependencies
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mvn -B dependency:resolve
+        # `compile` first: core depends on the annotations module, and dependency:resolve runs no
+        # lifecycle phase of its own, so without it that module is never built in this session and
+        # resolution falls through to the repository, where the unreleased version does not exist.
+        run: mvn -B compile dependency:resolve
 
       - name: conditional release
         env:
