@@ -273,7 +273,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
                   serialName,
                   jsonElement,
               )
-          SerialKind.ENUM -> enumToSchema(descriptor, serialName, defs, refModelNamePrefix)
+          SerialKind.ENUM -> enumToSchema(descriptor, serialName, defs, refModelNamePrefix, kType)
           SerialKind.CONTEXTUAL -> {
             val contextualDescriptor =
                 kotlinxJson.serializersModule.getContextualDescriptor(descriptor)
@@ -366,6 +366,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
       serialName: String,
       defs: DefinitionAccumulator<NODE>,
       refModelNamePrefix: String?,
+      kType: KType? = null,
   ): NODE {
     val shortName = serialName.substringAfterLast('.')
     val defName =
@@ -381,7 +382,11 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
                       "type" to json.string("string"),
                       "enum" to json.array(elementNames.map { json.string(it) }),
                   ),
-                  loadKClass(serialName),
+                  // The KType first, as in classToSchema: loadKClass goes through
+                  // Class.forName, which cannot resolve a nested enum's dotted serial name
+                  // against its `Outer$Inner` binary name and would silently drop the
+                  // description.
+                  (kType?.classifier as? KClass<*>) ?: loadKClass(serialName),
               )
             },
             refModelNamePrefix = refModelNamePrefix,
