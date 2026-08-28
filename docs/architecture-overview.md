@@ -209,6 +209,14 @@ parses cleanly (no schema-validity bugs slip through).
   branches**: under `NullableStrategy.ANYOF` a nullable `$ref` sits one level down, and a
   top-level-only check reads it as inlined and copies the definition's description onto
   every field holding one.
+- **Resolve a class from the `KType` before `loadKClass`.** `loadKClass` goes through
+  `Class.forName`, which takes a *binary* name: a nested type is `Outer$Inner`, while its
+  serial name is dotted (`com.example.Outer.Inner`). The lookup therefore fails for any
+  nested declaration and, since both failure branches return `null`, does so silently —
+  a `@Description` on a nested enum simply never appears. `classToSchema` was never
+  affected because it tries `kType?.classifier` first; `enumToSchema` originally had no
+  `KType` to try, which is why it had to be threaded one. Anything else resolving a class
+  from a serial name alone inherits the same hole.
 - **`@Transient` fields disappear silently** — kotlinx.serialization's compiler plugin
   excludes them from both the descriptor and the encoded JSON. No special handling
   required; they simply don't appear in schemas.

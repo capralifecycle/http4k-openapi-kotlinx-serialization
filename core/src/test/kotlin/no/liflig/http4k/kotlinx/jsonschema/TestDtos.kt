@@ -861,3 +861,19 @@ data class DescribedSubclassDirectDto(val completed: DescribedSealedBase.Describ
     val example = DescribedSubclassDirectDto(DescribedSealedBase.DescribedCompleted.example)
   }
 }
+
+// --- Nested enum: resolvable only through the KType, not through Class.forName ---
+
+@Serializable
+data class NestedDescribedEnumDto(val nested: NestedEnum, val alsoNested: NestedEnum?) {
+  @Description("Described on an enum nested inside its owner.")
+  @Serializable
+  enum class NestedEnum {
+    FIRST,
+    SECOND,
+  }
+
+  companion object {
+    val example = NestedDescribedEnumDto(NestedEnum.FIRST, NestedEnum.SECOND)
+  }
+}

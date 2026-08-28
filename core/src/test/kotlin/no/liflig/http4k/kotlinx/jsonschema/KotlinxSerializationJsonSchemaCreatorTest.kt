@@ -1157,6 +1157,18 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
+  fun `renders a class description on a nested enum definition`() {
+    val schema = schemaCreator.toSchema(NestedDescribedEnumDto.example)
+
+    // A nested enum's serial name is dotted while its binary name uses `Outer$NestedEnum`, so
+    // resolving the class through Class.forName alone silently loses the description.
+    val definition = schema.definitions["NestedEnum"] as JsonObject
+    (definition["description"] as JsonPrimitive).content shouldBe
+        "Described on an enum nested inside its owner."
+    (definition["type"] as JsonPrimitive).content shouldBe "string"
+  }
+
+  @Test
   fun `renders description for the get use-site target`() {
     val schema = schemaCreator.toSchema(GetterDescribedDto.example)
     val definition = schema.definitions["GetterDescribedDto"]
