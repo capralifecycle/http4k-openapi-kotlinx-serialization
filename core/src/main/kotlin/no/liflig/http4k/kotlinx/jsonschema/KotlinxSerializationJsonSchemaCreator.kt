@@ -639,8 +639,18 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
               json.boolean(element.content.toBoolean())
           else -> {
             val content = element.content
+            // Non-integral numbers go through the Double overload rather than BigDecimal:
+            // http4k's kotlinx backend renders BigDecimal as JsonPrimitive("$this"), a *quoted*
+            // primitive, which would emit a JSON string under "type": "number" and leave the
+            // example failing validation against its own schema. Its Double and BigInteger
+            // overloads are unquoted. BigDecimal still gates validity, so NaN, Infinity and
+            // out-of-range magnitudes keep falling through to a string as before.
             content.toBigIntegerOrNull()?.let { json.number(it) }
-                ?: content.toBigDecimalOrNull()?.let { json.number(it) }
+                ?: content
+                    .toBigDecimalOrNull()
+                    ?.toDouble()
+                    ?.takeIf { it.isFinite() }
+                    ?.let { json.number(it) }
                 ?: json.string(content)
           }
         }
