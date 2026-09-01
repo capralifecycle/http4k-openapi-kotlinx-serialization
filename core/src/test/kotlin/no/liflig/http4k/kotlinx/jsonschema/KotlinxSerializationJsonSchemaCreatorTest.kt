@@ -1,6 +1,7 @@
 package no.liflig.http4k.kotlinx.jsonschema
 
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.maps.shouldBeEmpty
@@ -57,6 +58,22 @@ class KotlinxSerializationJsonSchemaCreatorTest {
         kotlinx.serialization.json.JsonElement.serializer(),
         combined,
     )
+  }
+
+  @Test
+  fun `emits numeric examples as JSON numbers rather than strings`() {
+    val schema = schemaCreator.toSchema(SimplePrimitivesDto.example)
+
+    val defName =
+        ((schema.node as JsonObject)["\$ref"] as JsonPrimitive).content.substringAfterLast('/')
+    val properties = (schema.definitions[defName] as JsonObject)["properties"] as JsonObject
+
+    // `content` reads the same either way, so assert on quoting itself: a quoted example
+    // does not validate against its own "type": "number" / "integer" schema.
+    for (property in listOf("age", "score", "rating")) {
+      val example = ((properties[property] as JsonObject)["example"] as JsonPrimitive)
+      withClue(property) { example.isString shouldBe false }
+    }
   }
 
   @Test
