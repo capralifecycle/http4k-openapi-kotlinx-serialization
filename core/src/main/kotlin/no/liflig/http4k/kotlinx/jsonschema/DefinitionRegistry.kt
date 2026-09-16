@@ -20,6 +20,7 @@ internal class DefinitionRegistry<NODE : Any>(
     private val refLocationPrefix: String,
     private val refModelNamePrefix: String?,
 ) {
+  /** One definition as collected: its short name and its built schema. */
   private class Entry<NODE>(val shortName: String, val schema: NODE)
 
   /** Definitions by identity, in the order their schemas finished building. */

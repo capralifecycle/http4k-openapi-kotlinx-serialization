@@ -32,7 +32,8 @@ runtime (`Json`, `SerialDescriptor`, `KSerializer`).
 
 ## Module / package layout
 
-Single Maven module. Two packages:
+Two Maven modules, `annotations` and `core`, published as two artifacts (AGENTS.md's
+Source layout table is the canonical module map). Two packages:
 
 | Package                                       | Responsibility                                                                 |
 | --------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -41,6 +42,8 @@ Single Maven module. Two packages:
 
 Source files:
 
+- `Description.kt` (module `annotations`) — the `@Description` annotation. Zero dependencies
+  by design; every file below lives in module `core`.
 - `KotlinxSerializationJsonSchemaCreator.kt` — the public entry point (implements http4k's
   `JsonSchemaCreator<Any, NODE>`). Resolves the root example's serializer, JSON and
   `KType`, then runs one `SchemaWalk` over a fresh `DefinitionRegistry`.
@@ -56,7 +59,8 @@ Source files:
 - `NullableStrategy.kt` — `TYPE_ARRAY` (default, generator-friendly) vs `ANYOF`
   (spec-strict).
 - `KotlinxOpenApi3Renderer.kt` — `ApiRenderer`: tries `JsonToJsonSchema` for NODE bodies,
-  hands everything else to the creator, and strips nulls from the rendered document.
+  hands everything else to the creator, and strips nulls from the rendered document
+  outside body examples.
 - `OpenApi3WithKotlinx.kt` — `openApi3WithKotlinx(...)` factory; wraps the renderer in
   `cached()`.
 
@@ -113,9 +117,12 @@ Source files:
 - `element[0]` = discriminator property (string).
 - `element[1]` = container whose elements are each subclass's descriptor.
 
-The schema creator validates this shape (`elementsCount >= 2` and
-`element[0].serialName == classDiscriminator`) and throws a descriptive error if
-kotlinx.serialization changes internals. Example values for subclasses come from the
+The schema creator validates only `elementsCount >= 2` and throws a descriptive error if
+that fails, guarding against a shape change in kotlinx.serialization internals. It
+deliberately does not compare `element[0].serialName` to the class discriminator:
+`element[0]` is always named `type`, the serializer's generator default, and the check
+would falsely reject any hierarchy using `@JsonClassDiscriminator`. The discriminator name
+is read from that annotation, falling back to `Json.classDiscriminator`. Example values for subclasses come from the
 `SealedClassExampleProvider`:
 
 - `data object` subclasses → used directly via `objectInstance`.
@@ -140,9 +147,12 @@ expressed as static JSON Schema.
 
 - Everything wrapped in `{"anyOf": [<schema>, {"type": "null"}]}`.
 
-Default is `TYPE_ARRAY` because `openapi-generator-cli` (the dominant TypeScript
-generator) emits empty wrapper interfaces for `anyOf`-nullable fields. Strict validators
-that distinguish "absent" from "null" should switch to `ANYOF`.
+Default is `TYPE_ARRAY`. An earlier, unrecorded version of `openapi-generator-cli` (the
+dominant TypeScript generator) was seen to emit empty wrapper interfaces for
+`anyOf`-nullable fields; that does not reproduce with 7.21.0 or newer, which emit
+`T | null`. `TYPE_ARRAY` stays the default regardless: it is equally valid OpenAPI 3.1 and
+renders correctly across generators old and new. Strict validators that distinguish
+"absent" from "null" should switch to `ANYOF`.
 
 ## Format mappings
 

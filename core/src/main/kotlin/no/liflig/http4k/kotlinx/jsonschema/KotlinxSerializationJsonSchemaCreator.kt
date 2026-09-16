@@ -25,6 +25,11 @@ import org.http4k.format.AutoMarshallingJson
 class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
     private val json: AutoMarshallingJson<NODE>,
     private val kotlinxJson: kotlinx.serialization.json.Json,
+    /**
+     * The path segment every `$ref` points under, as in `#/components/schemas/Foo`. Public so
+     * [no.liflig.http4k.kotlinx.openapi.KotlinxOpenApi3Renderer] can default its own prefix to this
+     * value rather than repeat the literal.
+     */
     val refLocationPrefix: String = "components/schemas",
     private val sealedClassExampleProvider: SealedClassExampleProvider =
         DefaultSealedClassExampleProvider(),

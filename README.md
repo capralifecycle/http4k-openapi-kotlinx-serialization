@@ -39,9 +39,8 @@ kotlinx.serialization's `SealedClassSerializer` builds descriptors with:
 **Risk**: This is an implementation detail, not a stable API.
 
 **Mitigation**: Defensive validation at runtime:
-- Verify `elementsCount >= 2`
-- Verify `element[0].serialName == classDiscriminator`
-- Throw descriptive error on structure mismatch
+- Verify `elementsCount >= 2` and throw a descriptive error otherwise.
+- `element[0].serialName` is deliberately **not** compared to the discriminator. It is always the `SealedClassSerializer`'s generator default (`type`), never a per-hierarchy `@JsonClassDiscriminator` override, so that comparison would reject valid overridden hierarchies. The discriminator name is read from `@JsonClassDiscriminator` on the descriptor, falling back to `Json.classDiscriminator`.
 
 If kotlinx.serialization changes this structure, tests fail immediately with clear error messages.
 
@@ -188,6 +187,8 @@ val routes = contract {
     )
 }
 ```
+
+Both classes take a `refLocationPrefix` parameter (default `"components/schemas"`), the path segment every `$ref` points under. `KotlinxOpenApi3Renderer` defaults it from the `schema` you pass in, so setting it once on `KotlinxSerializationJsonSchemaCreator` keeps every `$ref` consistent. Only pass it to `KotlinxOpenApi3Renderer` explicitly if the two must differ.
 
 Passing `apiRenderer` as a named parameter forces Kotlin to use the `OpenApi3` primary constructor (which takes `Json<NODE>`). The secondary constructor takes `AutoMarshallingJson<NODE>` and has no `apiRenderer` parameter — it always uses `ApiRenderer.Auto`, which falls back to Jackson and defeats the point of this library.
 

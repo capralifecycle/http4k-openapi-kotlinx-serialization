@@ -94,8 +94,8 @@ enum class StatusFilter {
 }
 
 /**
- * Constants with bodies compile to anonymous subclasses, which kotlinx.serialization cannot find a
- * serializer for. Exercises the renderer's Java-enum fallback.
+ * Constants with bodies compile to named subclasses of their enum, which kotlinx.serialization has
+ * no serializer for. Exercises the creator's resolution of the declaring enum class.
  */
 enum class Priority {
   HIGH {

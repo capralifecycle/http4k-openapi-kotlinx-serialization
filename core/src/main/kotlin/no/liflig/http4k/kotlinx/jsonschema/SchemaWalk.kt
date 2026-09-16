@@ -370,8 +370,9 @@ internal class SchemaWalk<NODE : Any>(
     val sealedKClass =
         kClassOf(kType, serialName)
             ?: throw IllegalStateException(
-                "Cannot load sealed class '$serialName' for example discovery. " +
-                    "Ensure the class is on the classpath or has a resolvable owner type."
+                "Cannot load sealed class '$serialName' to build its schema (subclass discovery, " +
+                    "examples and type description). Ensure the class is on the classpath or has " +
+                    "a resolvable owner type."
             )
     return registry.define(
         sealedKClass.qualifiedName ?: serialName,

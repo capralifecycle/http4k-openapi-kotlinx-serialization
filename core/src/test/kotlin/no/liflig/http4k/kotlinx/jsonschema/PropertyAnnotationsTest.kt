@@ -130,7 +130,7 @@ class PropertyAnnotationsTest {
   fun `marks deprecated whether a dto is reached directly or as a list element`() {
     // Route order decides which definition wins when http4k merges components, so the two paths
     // have to agree. The nested path threads List<RenamedDeprecatedDto> from the property's
-    // returnType; the top-level path builds its element type in resolveRootKType.
+    // returnType; the top-level path builds its element type in rootExample.
     val nested = schemaCreator.toSchema(RenamedDeprecatedContainerDto.example)
     val topLevel = schemaCreator.toSchema(listOf(RenamedDeprecatedDto.example))
 
