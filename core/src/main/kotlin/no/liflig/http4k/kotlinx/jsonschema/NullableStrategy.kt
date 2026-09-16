@@ -41,8 +41,9 @@ enum class NullableStrategy {
    * "field present with null value", or when spec correctness is more important than code generator
    * compatibility.
    *
-   * Known issue: `openapi-generator-cli` (typescript-fetch) generates empty wrapper interfaces for
-   * `anyOf` nullable fields instead of proper nullable types.
+   * An earlier, unrecorded version of `openapi-generator-cli` (typescript-fetch) was seen to
+   * generate empty wrapper interfaces for `anyOf` nullable fields instead of proper nullable types.
+   * This does not reproduce with 7.21.0 or newer, which emit `T | null`.
    */
   ANYOF,
 }

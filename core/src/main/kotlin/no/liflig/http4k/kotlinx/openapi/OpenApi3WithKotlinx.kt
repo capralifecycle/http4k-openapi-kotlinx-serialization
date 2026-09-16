@@ -23,12 +23,17 @@ import org.http4k.format.Json
  * Defaults to OpenAPI 3.1.0. Nullable representation is controlled by [NullableStrategy] on the
  * schema creator (defaults to [NullableStrategy.TYPE_ARRAY] for code generator compatibility).
  *
- * The [ApiRenderer] is wrapped in [cached] so the rendered OpenAPI document is memoized across
- * requests to `/openapi-schema.json`. This assumes the set of contract routes is **static** — built
+ * The [ApiRenderer] is wrapped in [cached], which memoizes the final `api(...)` rendering step
+ * only: [OpenApi3] still builds its `Api` model, and calls `toSchema` for every body, on each
+ * request to `/openapi-schema.json`. This assumes the set of contract routes is **static** — built
  * once at startup and not mutated per-request. If a service needs dynamic contracts (e.g.
  * per-tenant routes registered after startup, feature-flag-toggled endpoints) the cached document
  * will serve the first-rendered snapshot indefinitely; construct [KotlinxOpenApi3Renderer] and pass
  * it to [OpenApi3] manually without `.cached()` in that case.
+ *
+ * Array-typed body examples (`List<...>` request or response bodies) need http4k 6.59.0.0 or newer:
+ * older versions of http4k's kotlinx.serialization format reject a top-level JSON array when
+ * [OpenApi3] re-parses the example, and silently drop it.
  *
  * Usage:
  * ```kotlin

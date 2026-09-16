@@ -419,6 +419,35 @@ data class NestedSealedContainerDto(
   }
 }
 
+// --- Multi-level sealed hierarchy (a sealed subtype under a sealed parent) ---
+
+@Serializable
+sealed interface MultiLevelBase {
+  @Serializable @SerialName("ml_ok") data object Ok : MultiLevelBase
+
+  @Serializable
+  sealed interface Err : MultiLevelBase {
+    @Serializable
+    @SerialName("ml_creation_error")
+    data class CreationError(val message: String) : Err {
+      companion object {
+        val example = CreationError("Unknown child reference")
+      }
+    }
+
+    @Serializable @SerialName("ml_unknown") data object Unknown : Err
+  }
+}
+
+@Serializable
+data class MultiLevelContainerDto(
+    val status: MultiLevelBase,
+) {
+  companion object {
+    val example = MultiLevelContainerDto(MultiLevelBase.Ok)
+  }
+}
+
 // --- Sealed classes with colliding @SerialName values ---
 
 @Serializable
