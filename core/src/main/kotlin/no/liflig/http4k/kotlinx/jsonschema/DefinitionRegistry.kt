@@ -6,153 +6,85 @@ import org.http4k.format.JsonType
 
 /**
  * Collects the named definitions one [SchemaWalk] produces and decides the key each is published
- * under, resolving short-name collisions and the caller's `overrideDefinitionId`. Created per
- * `toSchema` call.
+ * under. Created per `toSchema` call.
+ *
+ * During the walk every definition is keyed, and every `$ref` written, by its *identity*: the
+ * serial name, or for sealed hierarchies the qualified class name, which is unique by construction.
+ * [finish] then assigns the published names in one pass — the short name where it is uncontested,
+ * the dotted identity with `_` where two identities share a short name, the caller's override id
+ * for the root — and rewrites every ref to match. Naming once, after the walk, means no ref is ever
+ * written against a name that a later collision would have to take back.
  */
 internal class DefinitionRegistry<NODE : Any>(
     private val json: Json<NODE>,
     private val refLocationPrefix: String,
     private val refModelNamePrefix: String?,
 ) {
-  private val schemas: MutableMap<String, NODE> = mutableMapOf()
-  private val serialNames: MutableMap<String, String> = mutableMapOf()
+  private class Entry<NODE>(val shortName: String, val schema: NODE)
+
+  /** Definitions by identity, in the order their schemas finished building. */
+  private val entries = LinkedHashMap<String, Entry<NODE>>()
+
+  /** Identities whose schema is being built further up the stack. */
+  private val inProgress = mutableSetOf<String>()
+
+  /** The JSON pointer to the definition for [identity], as written during the walk. */
+  fun refPath(identity: String): String = "#/$refLocationPrefix/$identity"
+
+  /** A `$ref` node pointing at the definition for [identity]. */
+  fun ref(identity: String): NODE = json.obj("\$ref" to json.string(refPath(identity)))
 
   /**
-   * Tracks definitions that were renamed mid-walk due to short-name collisions. Maps the *original*
-   * definition key (what already-emitted refs are pointing at) to the *new* key. Applied as a
-   * post-walk sweep in [finish] so stale `$ref`s are rewritten consistently across [schemas] and
-   * the root node.
+   * A `$ref` to the definition for [identity], building and registering its schema first unless
+   * that is already done or under way. The second case is a recursive type referring back to
+   * itself, and the ref is what breaks the cycle.
    */
-  private val collisionRenames: MutableMap<String, String> = mutableMapOf()
-
-  private val visited = mutableSetOf<String>()
-
-  /** The JSON pointer to the definition published as [defName]. */
-  fun refPath(defName: String): String = "#/$refLocationPrefix/$defName"
-
-  /** A `$ref` node pointing at the definition published as [defName]. */
-  fun ref(defName: String): NODE = json.obj("\$ref" to json.string(refPath(defName)))
-
-  /** True when a class with this serial name is already being, or has been, rendered. */
-  fun alreadyVisited(serialName: String): Boolean = visited.contains(serialName)
-
-  fun markVisited(serialName: String) {
-    visited.add(serialName)
-  }
-
-  /**
-   * Registers [schema] under a key derived from [shortName], or returns the existing key when the
-   * same [serialName] was already registered. A different serial name already holding the short
-   * name is renamed to its full form, and the new one takes its full form too.
-   */
-  fun add(serialName: String, shortName: String, schema: () -> NODE): String {
-    val existingKey = findKey(serialName, shortName)
-
-    if (existingKey != null) {
-      val existingSerialName = serialNames[existingKey]
-      if (existingSerialName != serialName) {
-        val oldFullName = existingSerialName?.replace('.', '_') ?: existingKey
-        val oldPrefixedName = refModelNamePrefix?.let { "$it$oldFullName" } ?: oldFullName
-        val existing =
-            schemas.remove(existingKey)
-                ?: throw IllegalStateException(
-                    "Expected definition '$existingKey' not found during collision resolution"
-                )
-        schemas[oldPrefixedName] = existing
-        serialNames.remove(existingKey)
-        serialNames[oldPrefixedName] = existingSerialName ?: existingKey
-        // Record the rename so any `$ref` emitted earlier (pointing at existingKey)
-        // can be rewritten to oldPrefixedName by the post-walk sweep in finish.
-        if (existingKey != oldPrefixedName) {
-          collisionRenames[existingKey] = oldPrefixedName
-        }
-
-        val newFullName = serialName.replace('.', '_')
-        val newPrefixedName = refModelNamePrefix?.let { "$it$newFullName" } ?: newFullName
-        schemas[newPrefixedName] = schema()
-        serialNames[newPrefixedName] = serialName
-        return newPrefixedName
-      } else {
-        return existingKey
-      }
-    } else {
-      val defName = refModelNamePrefix?.let { "$it$shortName" } ?: shortName
-      schemas[defName] = schema()
-      serialNames[defName] = serialName
-      return defName
+  fun define(identity: String, shortName: String, build: () -> NODE): NODE {
+    if (identity !in entries && inProgress.add(identity)) {
+      entries[identity] = Entry(shortName, build())
+      inProgress.remove(identity)
     }
+    return ref(identity)
   }
 
-  /** The key a class already visited is, or will be, published under. */
-  fun existingName(serialName: String, shortName: String): String =
-      findKey(serialName, shortName) ?: (refModelNamePrefix?.let { "$it$shortName" } ?: shortName)
-
-  private fun findKey(serialName: String, shortName: String): String? =
-      schemas.keys.find { key ->
-        val strippedKey = refModelNamePrefix?.let { key.removePrefix(it) } ?: key
-        strippedKey == shortName || strippedKey == serialName.replace('.', '_')
-      }
-
-  /**
-   * Applies the pending collision renames and, when given, the override id to the root definition,
-   * then packages the root [node] with every definition.
-   */
-  fun finish(node: NODE, overrideDefinitionId: String?): JsonSchema<NODE> {
-    val renamed = applyCollisionRenames(node)
-    return if (overrideDefinitionId != null) {
-      applyOverrideDefinitionId(renamed, overrideDefinitionId)
-    } else {
-      JsonSchema(renamed, schemas)
-    }
-  }
-
-  private fun applyCollisionRenames(node: NODE): NODE {
-    if (collisionRenames.isEmpty()) return node
+  /** Names every definition, rewrites the refs in [rootNode] and the definitions to match. */
+  fun finish(rootNode: NODE, overrideDefinitionId: String?): JsonSchema<NODE> {
+    val names = publishedNames(rootNode, overrideDefinitionId)
     val pathRenames =
-        collisionRenames.entries.associate { (oldKey, newKey) ->
-          "#/$refLocationPrefix/$oldKey" to "#/$refLocationPrefix/$newKey"
+        names
+            .mapKeys { (identity, _) -> refPath(identity) }
+            .mapValues { (_, name) -> "#/$refLocationPrefix/$name" }
+    val definitions =
+        entries.entries.associateTo(LinkedHashMap()) { (identity, entry) ->
+          names.getValue(identity) to rewriteRefPaths(entry.schema, pathRenames)
         }
-    val rewrittenDefs = schemas.mapValues { (_, v) -> rewriteRefPaths(v, pathRenames) }
-    schemas.clear()
-    schemas.putAll(rewrittenDefs)
-    collisionRenames.clear()
-    return rewriteRefPaths(node, pathRenames)
+    return JsonSchema(rewriteRefPaths(rootNode, pathRenames), definitions)
   }
 
-  private fun applyOverrideDefinitionId(
-      node: NODE,
-      overrideDefinitionId: String,
-  ): JsonSchema<NODE> {
-    val refField = json.fields(node).firstOrNull { (k, _) -> k == "\$ref" }
-    if (refField == null) {
-      // Inline schema (primitives, arrays, maps) — no definition to rename.
-      return JsonSchema(node, schemas)
+  private fun publishedNames(rootNode: NODE, overrideDefinitionId: String?): Map<String, String> {
+    val contested = entries.values.groupingBy { it.shortName }.eachCount().filterValues { it > 1 }
+    val names =
+        entries.mapValuesTo(LinkedHashMap()) { (identity, entry) ->
+          val name =
+              if (entry.shortName in contested) identity.replace('.', '_') else entry.shortName
+          refModelNamePrefix.orEmpty() + name
+        }
+    if (overrideDefinitionId != null) {
+      // Only a root that is itself a definition can be renamed; an inline root (primitive,
+      // array, map) has nothing to rename.
+      rootIdentity(rootNode)?.let {
+        names[it] = refModelNamePrefix.orEmpty() + overrideDefinitionId
+      }
     }
-
-    val originalRefPath = json.text(refField.second)
-    val originalDefKey = originalRefPath.removePrefix("#/$refLocationPrefix/")
-    val newDefKey = (refModelNamePrefix ?: "") + overrideDefinitionId
-
-    if (originalDefKey == newDefKey) {
-      return JsonSchema(node, schemas)
-    }
-
-    val newRefPath = "#/$refLocationPrefix/$newDefKey"
-    val pathRenames = mapOf(originalRefPath to newRefPath)
-
-    // Move the renamed definition under the new key, then rewrite every inner $ref
-    // so recursive self-references and cross-definition refs stay consistent.
-    val moved = schemas.remove(originalDefKey)
-    serialNames.remove(originalDefKey)
-    val rewrittenDefs = schemas.mapValues { (_, v) -> rewriteRefPaths(v, pathRenames) }
-    schemas.clear()
-    schemas.putAll(rewrittenDefs)
-    if (moved != null) {
-      schemas[newDefKey] = rewriteRefPaths(moved, pathRenames)
-    }
-
-    return JsonSchema(ref(newDefKey), schemas)
+    return names
   }
+
+  private fun rootIdentity(rootNode: NODE): String? =
+      json
+          .fields(rootNode)
+          .firstOrNull { (name, _) -> name == "\$ref" }
+          ?.let { (_, path) -> json.text(path).removePrefix("#/$refLocationPrefix/") }
+          ?.takeIf { it in entries }
 
   /**
    * Recursively walks [node] and rewrites every string whose content exactly matches one of the old
@@ -165,10 +97,7 @@ internal class DefinitionRegistry<NODE : Any>(
         JsonType.Object ->
             json.obj(json.fields(node).map { (k, v) -> k to rewriteRefPaths(v, pathRenames) })
         JsonType.Array -> json.array(json.elements(node).map { rewriteRefPaths(it, pathRenames) })
-        JsonType.String -> {
-          val text = json.text(node)
-          if (pathRenames.containsKey(text)) json.string(pathRenames.getValue(text)) else node
-        }
+        JsonType.String -> pathRenames[json.text(node)]?.let { json.string(it) } ?: node
         else -> node
       }
 }

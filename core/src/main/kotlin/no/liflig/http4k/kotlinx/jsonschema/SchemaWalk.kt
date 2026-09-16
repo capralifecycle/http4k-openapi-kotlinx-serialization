@@ -113,24 +113,20 @@ internal class SchemaWalk<NODE : Any>(
   }
 
   private fun enumToSchema(descriptor: SerialDescriptor, serialName: String, kType: KType?): NODE {
-    val shortName = serialName.substringAfterLast('.')
-    val defName =
-        registry.add(serialName, shortName) {
-          val elementNames =
-              (0 until descriptor.elementsCount).map { descriptor.getElementName(it) }
-          withClassDescription(
-              json.obj(
-                  "type" to json.string("string"),
-                  "enum" to json.array(elementNames.map { json.string(it) }),
-              ),
-              // The KType first, as in classToSchema: loadKClass goes through
-              // Class.forName, which cannot resolve a nested enum's dotted serial name
-              // against its `Outer$Inner` binary name and would silently drop the
-              // description.
-              (kType?.classifier as? KClass<*>) ?: loadKClass(serialName),
-          )
-        }
-    return registry.ref(defName)
+    return registry.define(serialName, serialName.substringAfterLast('.')) {
+      val elementNames = (0 until descriptor.elementsCount).map { descriptor.getElementName(it) }
+      withClassDescription(
+          json.obj(
+              "type" to json.string("string"),
+              "enum" to json.array(elementNames.map { json.string(it) }),
+          ),
+          // The KType first, as in classToSchema: loadKClass goes through
+          // Class.forName, which cannot resolve a nested enum's dotted serial name
+          // against its `Outer$Inner` binary name and would silently drop the
+          // description.
+          (kType?.classifier as? KClass<*>) ?: loadKClass(serialName),
+      )
+    }
   }
 
   private fun classToSchema(
@@ -139,30 +135,22 @@ internal class SchemaWalk<NODE : Any>(
       jsonElement: JsonElement?,
       kType: KType?,
   ): NODE {
-    val shortName = serialName.substringAfterLast('.')
-    if (registry.alreadyVisited(serialName)) {
-      return registry.ref(registry.existingName(serialName, shortName))
+    return registry.define(serialName, serialName.substringAfterLast('.')) {
+      val (properties, requiredFields) =
+          buildObjectProperties(descriptor, jsonElement as? JsonObject, kType)
+
+      val schemaFields = mutableListOf<Pair<String, NODE>>()
+      schemaFields.add("type" to json.string("object"))
+      schemaFields.add("properties" to json.obj(properties))
+      if (requiredFields.isNotEmpty()) {
+        schemaFields.add("required" to json.array(requiredFields.map { json.string(it) }))
+      }
+
+      withClassDescription(
+          json.obj(schemaFields),
+          (kType?.classifier as? KClass<*>) ?: loadKClass(serialName),
+      )
     }
-    registry.markVisited(serialName)
-
-    val (properties, requiredFields) =
-        buildObjectProperties(descriptor, jsonElement as? JsonObject, kType)
-
-    val schemaFields = mutableListOf<Pair<String, NODE>>()
-    schemaFields.add("type" to json.string("object"))
-    schemaFields.add("properties" to json.obj(properties))
-    if (requiredFields.isNotEmpty()) {
-      schemaFields.add("required" to json.array(requiredFields.map { json.string(it) }))
-    }
-
-    val objectSchema =
-        withClassDescription(
-            json.obj(schemaFields),
-            (kType?.classifier as? KClass<*>) ?: loadKClass(serialName),
-        )
-
-    val defName = registry.add(serialName, shortName) { objectSchema }
-    return registry.ref(defName)
   }
 
   private fun listToSchema(
@@ -407,6 +395,18 @@ internal class SchemaWalk<NODE : Any>(
                       "Ensure the class is on the classpath or has a resolvable owner type.",
               )
         }
+    val parentIdentity = sealedKClass.qualifiedName ?: serialName
+    val parentShortName = sealedKClass.simpleName ?: serialName.substringAfterLast('.')
+    return registry.define(parentIdentity, parentShortName) {
+      sealedParentSchema(subclassContainerDescriptor, classDiscriminator, sealedKClass)
+    }
+  }
+
+  private fun sealedParentSchema(
+      subclassContainerDescriptor: SerialDescriptor,
+      classDiscriminator: String,
+      sealedKClass: KClass<*>,
+  ): NODE {
     val examples = sealedClassExampleProvider.getExamples(sealedKClass)
     val examplesBySerialName =
         examples.associateBy { example ->
@@ -482,29 +482,21 @@ internal class SchemaWalk<NODE : Any>(
       // their simple names also collide.
       val subclassIdentity =
           subclassKClasses[discriminatorValue]?.qualifiedName ?: discriminatorValue
-      val subclassDefName = registry.add(subclassIdentity, shortName) { subclassSchema }
-
-      oneOfRefs.add(registry.ref(subclassDefName))
-      discriminatorMapping[discriminatorValue] = registry.refPath(subclassDefName)
+      oneOfRefs.add(registry.define(subclassIdentity, shortName) { subclassSchema })
+      discriminatorMapping[discriminatorValue] = registry.refPath(subclassIdentity)
     }
 
-    val parentQualifiedName = sealedKClass.qualifiedName ?: serialName
-    val parentShortName = sealedKClass.simpleName ?: serialName.substringAfterLast('.')
-    val parentSchema =
-        withClassDescription(
-            json.obj(
-                "oneOf" to json.array(oneOfRefs),
-                "discriminator" to
-                    json.obj(
-                        "propertyName" to json.string(classDiscriminator),
-                        "mapping" to
-                            json.obj(discriminatorMapping.map { (k, v) -> k to json.string(v) }),
-                    ),
-            ),
-            sealedKClass,
-        )
-
-    val parentDefName = registry.add(parentQualifiedName, parentShortName) { parentSchema }
-    return registry.ref(parentDefName)
+    return withClassDescription(
+        json.obj(
+            "oneOf" to json.array(oneOfRefs),
+            "discriminator" to
+                json.obj(
+                    "propertyName" to json.string(classDiscriminator),
+                    "mapping" to
+                        json.obj(discriminatorMapping.map { (k, v) -> k to json.string(v) }),
+                ),
+        ),
+        sealedKClass,
+    )
   }
 }

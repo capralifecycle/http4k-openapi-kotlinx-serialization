@@ -914,6 +914,21 @@ class KotlinxSerializationJsonSchemaCreatorTest {
     asString shouldNotContain "\"#/components/schemas/User\""
   }
 
+  @Test
+  fun `three-way short-name collision disambiguates every definition`() {
+    val schema = schemaCreator.toSchema(ThreeUsersDto.example)
+
+    schema.definitions shouldContainKey "packageA_User"
+    schema.definitions shouldContainKey "packageB_User"
+    schema.definitions shouldContainKey "packageC_User"
+    schema.definitions shouldNotContainKey "User"
+
+    val def = schema.definitions["ThreeUsersDto"]!!
+    val asString = kotlinx.serialization.json.Json.encodeToString(JsonElement.serializer(), def)
+    asString shouldContain "#/components/schemas/packageC_User"
+    asString shouldNotContain "\"#/components/schemas/User\""
+  }
+
   // --- M2 regression: two sealed hierarchies with same-named subclasses each get a definition ---
 
   @Test

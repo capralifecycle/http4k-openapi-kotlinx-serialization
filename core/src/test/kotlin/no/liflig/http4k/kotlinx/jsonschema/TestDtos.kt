@@ -607,6 +607,25 @@ data class TwoUsersDto(
   }
 }
 
+@Serializable
+@SerialName("packageC.User")
+data class PackageCUser(val id: Int) {
+  companion object {
+    val example = PackageCUser(7)
+  }
+}
+
+@Serializable
+data class ThreeUsersDto(
+    val a: PackageAUser,
+    val b: PackageBUser,
+    val c: PackageCUser,
+) {
+  companion object {
+    val example = ThreeUsersDto(PackageAUser.example, PackageBUser.example, PackageCUser.example)
+  }
+}
+
 // --- M2: two sealed hierarchies whose subclasses share simple name + @SerialName ---
 
 @Serializable
