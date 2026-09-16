@@ -25,7 +25,7 @@ import org.http4k.format.AutoMarshallingJson
 class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
     private val json: AutoMarshallingJson<NODE>,
     private val kotlinxJson: kotlinx.serialization.json.Json,
-    private val refLocationPrefix: String = "components/schemas",
+    val refLocationPrefix: String = "components/schemas",
     private val sealedClassExampleProvider: SealedClassExampleProvider =
         DefaultSealedClassExampleProvider(),
     private val formatMappings: Map<String, String> = emptyMap(),
@@ -118,7 +118,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
                     }
                   },
               ),
-              List::class.createType(listOf(invariant(first::class.starProjectedType))),
+              List::class.createType(listOf(invariant(kotlinTypeOf(first)))),
           )
         }
         is Map<*, *> -> {
@@ -139,10 +139,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
               serializer.descriptor,
               kotlinxJson.encodeToJsonElement(serializer, entries),
               Map::class.createType(
-                  listOf(
-                      invariant(key::class.starProjectedType),
-                      invariant(value::class.starProjectedType),
-                  )
+                  listOf(invariant(kotlinTypeOf(key)), invariant(kotlinTypeOf(value)))
               ),
           )
         }
@@ -151,10 +148,20 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
           RootExample(
               serializer.descriptor,
               kotlinxJson.encodeToJsonElement(serializer, obj),
-              obj::class.starProjectedType,
+              kotlinTypeOf(obj),
           )
         }
       }
 
-  private fun serializerFor(obj: Any) = kotlinxJson.serializersModule.serializer(obj::class.java)
+  private fun serializerFor(obj: Any) =
+      kotlinxJson.serializersModule.serializer(serializableClassOf(obj))
+
+  private fun kotlinTypeOf(obj: Any): KType = serializableClassOf(obj).kotlin.starProjectedType
+
+  /**
+   * The class a serializer is looked up for. An enum constant that declares a body is an instance
+   * of a synthetic subclass of its enum, which has no serializer of its own; the enum does.
+   */
+  private fun serializableClassOf(obj: Any): Class<*> =
+      obj.javaClass.let { if (obj is Enum<*> && !it.isEnum) it.superclass else it }
 }

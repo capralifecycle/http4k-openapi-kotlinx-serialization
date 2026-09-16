@@ -173,35 +173,30 @@ internal class SchemaWalk<NODE : Any>(
     return json.obj("type" to json.string("object"), "additionalProperties" to valueSchema)
   }
 
-  private fun wrapNullable(schema: NODE): NODE {
-    return when (nullableStrategy) {
-      NullableStrategy.ANYOF ->
-          json.obj("anyOf" to json.array(listOf(schema, json.obj("type" to json.string("null")))))
-
-      NullableStrategy.TYPE_ARRAY -> {
-        val fields = json.fields(schema).toList()
-        val hasRef = fields.any { (k, _) -> k == "\$ref" }
-
-        if (hasRef) {
-          // $ref types: return as-is — no "type" field exists to merge "null" into
-          schema
-        } else {
-          // Primitive/inline types: merge "null" into type array
-          val typeField = fields.find { (k, _) -> k == "type" }
-          if (typeField != null) {
-            val newFields =
-                fields.map { (k, v) ->
-                  if (k == "type") k to json.array(listOf(v, json.string("null"))) else k to v
+  private fun wrapNullable(schema: NODE): NODE =
+      when {
+        nullableStrategy == NullableStrategy.ANYOF -> anyOfNull(schema)
+        // A $ref has no "type" to merge "null" into, so it stays as it is. See NullableStrategy.
+        fieldNamed(schema, "\$ref") != null -> schema
+        fieldNamed(schema, "type") != null ->
+            json.obj(
+                json.fields(schema).map { (name, value) ->
+                  if (name == "type") name to json.array(listOf(value, json.string("null")))
+                  else name to value
                 }
-            json.obj(newFields)
-          } else {
-            // Fallback for schemas without type or $ref (shouldn't occur in practice)
-            json.obj("anyOf" to json.array(listOf(schema, json.obj("type" to json.string("null")))))
-          }
-        }
+            )
+        // Neither: not produced by this walk, but anyOf is always a valid way to say nullable.
+        else -> anyOfNull(schema)
       }
-    }
-  }
+
+  private fun anyOfNull(schema: NODE): NODE =
+      json.obj("anyOf" to json.array(listOf(schema, json.obj("type" to json.string("null")))))
+
+  private fun fieldNamed(node: NODE, name: String): NODE? =
+      json.fields(node).firstOrNull { (field, _) -> field == name }?.second
+
+  private fun NODE.plusField(name: String, value: NODE): NODE =
+      json.obj(json.fields(this).toList() + (name to value))
 
   /**
    * Appends `"deprecated": true` to an already-built property schema.
@@ -212,7 +207,7 @@ internal class SchemaWalk<NODE : Any>(
    * [NullableStrategy.ANYOF] rather than inside one of its branches.
    */
   private fun withDeprecatedMarker(schema: NODE): NODE =
-      json.obj(json.fields(schema).toList() + ("deprecated" to json.boolean(true)))
+      schema.plusField("deprecated", json.boolean(true))
 
   /**
    * Appends `"description"` to an already-built property schema.
@@ -222,7 +217,7 @@ internal class SchemaWalk<NODE : Any>(
    * rather than inside one branch of an `anyOf`.
    */
   private fun withDescription(schema: NODE, description: String): NODE =
-      json.obj(json.fields(schema).toList() + ("description" to json.string(description)))
+      schema.plusField("description", json.string(description))
 
   /**
    * The description for a property: its own [Description], or failing that the one on its declared
@@ -256,14 +251,12 @@ internal class SchemaWalk<NODE : Any>(
    * the definition's description onto every field.
    */
   private fun rendersAsReference(schema: NODE): Boolean {
-    if (json.fields(schema).any { (name, _) -> name == "\$ref" }) return true
+    if (fieldNamed(schema, "\$ref") != null) return true
 
-    val branches = json.fields(schema).firstOrNull { (name, _) -> name == "anyOf" }?.second
-    return branches != null &&
-        json.typeOf(branches) == JsonType.Array &&
+    val branches = fieldNamed(schema, "anyOf") ?: return false
+    return json.typeOf(branches) == JsonType.Array &&
         json.elements(branches).any { branch ->
-          json.typeOf(branch) == JsonType.Object &&
-              json.fields(branch).any { (name, _) -> name == "\$ref" }
+          json.typeOf(branch) == JsonType.Object && fieldNamed(branch, "\$ref") != null
         }
   }
 

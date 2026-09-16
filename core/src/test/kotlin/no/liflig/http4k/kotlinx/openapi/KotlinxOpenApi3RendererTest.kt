@@ -113,6 +113,21 @@ class KotlinxOpenApi3RendererTest {
     ALL,
   }
 
+  /**
+   * Constants with bodies compile to anonymous subclasses, which kotlinx.serialization cannot find
+   * a serializer for. Exercises the renderer's Java-enum fallback.
+   */
+  enum class Priority {
+    HIGH {
+      override fun weight() = 2
+    },
+    LOW {
+      override fun weight() = 1
+    };
+
+    abstract fun weight(): Int
+  }
+
   @Serializable
   enum class TaskStatus {
     OPEN,
@@ -290,6 +305,34 @@ class KotlinxOpenApi3RendererTest {
             ?.get("schema")
             ?.jsonObject
     paramSchema?.get("\$ref")?.jsonPrimitive?.content shouldBe "#/components/schemas/StatusFilter"
+  }
+
+  @Test
+  fun `renders enum query parameter whose constants declare bodies`() {
+    val priorityLens = Query.enum<Priority>().required("priority")
+
+    val app = buildContract {
+      routes +=
+          "/items" meta
+              {
+                summary = "List items"
+                queries += priorityLens
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val spec = fetchSpec(app)
+    val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
+
+    // Keyed by the enum type, not by the constant's anonymous class or the parameter name.
+    schemas shouldContainKey "Priority"
+    schemas shouldNotContainKey "priority"
+    schemas["Priority"]?.jsonObject?.get("enum")?.jsonArray?.map {
+      it.jsonPrimitive.content
+    } shouldBe listOf("HIGH", "LOW")
   }
 
   @Test
