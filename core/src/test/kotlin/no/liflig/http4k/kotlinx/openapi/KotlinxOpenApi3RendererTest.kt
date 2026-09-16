@@ -930,5 +930,104 @@ class KotlinxOpenApi3RendererTest {
     val spec = fetchSpec(app)
     val paths = spec["paths"]?.jsonObject.shouldNotBeNull()
     paths shouldContainKey "/raw-array"
+    requestExample(spec, "/raw-array", "post") shouldBe example
   }
+
+  @Test
+  fun `list response body keeps its example`() {
+    val listLens = Body.auto<List<CreateResponse>>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/items" meta
+              {
+                summary = "List items"
+                returning(
+                    OK,
+                    listLens to listOf(CreateResponse("id-1", true), CreateResponse("id-2", false)),
+                )
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val example = responseExample(fetchSpec(app), "/items", "get").shouldNotBeNull().jsonArray
+    example.map { it.jsonObject["id"]?.jsonPrimitive?.content } shouldBe listOf("id-1", "id-2")
+  }
+
+  @Test
+  fun `list request body keeps its example`() {
+    val listLens = Body.auto<List<CreateRequest>>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/items" meta
+              {
+                summary = "Create items"
+                receiving(listLens to listOf(CreateRequest("first", 1)))
+              } bindContract
+              POST to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val example = requestExample(fetchSpec(app), "/items", "post").shouldNotBeNull().jsonArray
+    example.map { it.jsonObject["name"]?.jsonPrimitive?.content } shouldBe listOf("first")
+  }
+
+  @Test
+  fun `null values inside a list example are preserved`() {
+    val listLens = Body.auto<List<OverridesDto>>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/overrides" meta
+              {
+                summary = "List overrides"
+                returning(OK, listLens to listOf(OverridesDto(null, 3)))
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val example = responseExample(fetchSpec(app), "/overrides", "get").shouldNotBeNull().jsonArray
+    example.single().jsonObject["overriddenName"] shouldBe JsonNull
+  }
+
+  private fun requestExample(spec: JsonObject, path: String, method: String): JsonElement? =
+      spec["paths"]
+          ?.jsonObject
+          ?.get(path)
+          ?.jsonObject
+          ?.get(method)
+          ?.jsonObject
+          ?.get("requestBody")
+          ?.jsonObject
+          ?.get("content")
+          ?.jsonObject
+          ?.get("application/json")
+          ?.jsonObject
+          ?.get("example")
+
+  private fun responseExample(spec: JsonObject, path: String, method: String): JsonElement? =
+      spec["paths"]
+          ?.jsonObject
+          ?.get(path)
+          ?.jsonObject
+          ?.get(method)
+          ?.jsonObject
+          ?.get("responses")
+          ?.jsonObject
+          ?.get("200")
+          ?.jsonObject
+          ?.get("content")
+          ?.jsonObject
+          ?.get("application/json")
+          ?.jsonObject
+          ?.get("example")
 }

@@ -77,6 +77,25 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
+  fun `uses companion example of a leaf below a nested sealed level`() {
+    val schema = schemaCreator.toSchema(MultiLevelContainerDto.example)
+
+    val leaf = schema.definitions["CreationError"].shouldNotBeNull() as JsonObject
+    val message = (leaf["properties"] as JsonObject)["message"] as JsonObject
+    (message["example"] as? JsonPrimitive)?.content shouldBe "Unknown child reference"
+
+    val base = schema.definitions["MultiLevelBase"] as JsonObject
+    (base["oneOf"] as JsonArray).map {
+      ((it as JsonObject)["\$ref"] as JsonPrimitive).content
+    } shouldBe
+        listOf(
+            "#/components/schemas/CreationError",
+            "#/components/schemas/Unknown",
+            "#/components/schemas/Ok",
+        )
+  }
+
+  @Test
   fun `renders schema for simple primitives`() {
     val schema = schemaCreator.toSchema(SimplePrimitivesDto.example)
 

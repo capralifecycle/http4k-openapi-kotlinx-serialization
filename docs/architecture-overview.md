@@ -44,13 +44,14 @@ Five source files total:
 - `KotlinxSerializationJsonSchemaCreator.kt` — core schema walker (implements http4k's
   `JsonSchemaCreator<Any, NODE>`).
 - `SealedClassExampleProvider.kt` — interface + `DefaultSealedClassExampleProvider` that
-  discovers examples via `companion.example` on sealed subclasses.
+  discovers examples via `companion.example` on sealed leaves, walking through nested
+  sealed levels.
 - `NullableStrategy.kt` — `TYPE_ARRAY` (default, generator-friendly) vs `ANYOF`
   (spec-strict).
 - `KotlinxOpenApi3Renderer.kt` — `ApiRenderer` with a three-step fallback chain (NODE
   bodies → `@Serializable` DTOs → Java Enum reflection).
 - `OpenApi3WithKotlinx.kt` — `openApi3WithKotlinx(...)` factory; wraps the renderer in
-  `cached()` so rendered docs are memoised across requests.
+  `cached()`.
 
 ## End-to-end flow — `toSchema(dto)` for a `@Serializable` DTO
 
@@ -116,6 +117,8 @@ kotlinx.serialization changes internals. Example values for subclasses come from
 - `data class` subclasses → look up a `companion object` with an `example` property.
   Missing examples are silently skipped (the schema is still generated, just without
   example values for that subclass).
+- A sealed subtype under the sealed parent is recursed into, matching
+  `collectLeafSubclasses`; its own companion is not read.
 
 `PolymorphicKind.OPEN` is rejected outright — the runtime-dynamic subclass set can't be
 expressed as static JSON Schema.
@@ -154,16 +157,18 @@ underscore-separated names (`com_example_UserDto`). `refModelNamePrefix` is appl
 
 ## Caching
 
-`openApi3WithKotlinx` wraps the renderer in http4k's `ApiRenderer.cached()` so the
-serialised OpenAPI document is memoised across requests to `/openapi-schema.json`. The
-underlying `KotlinxOpenApi3Renderer` is therefore expected to be called once per
-process; `KotlinxSerializationJsonSchemaCreator` is internally stateless (no `defs` map
-shared across calls — each `toSchema` allocates its own `DefinitionAccumulator`).
+`openApi3WithKotlinx` wraps the renderer in http4k's `ApiRenderer.cached()`. That
+memoises only the final `api(model)` step: `OpenApi3` still builds its `Api` model on
+every request to `/openapi-schema.json`, which calls `toSchema` for every body. So
+`KotlinxOpenApi3Renderer.api` runs once per process while `toSchema` runs per request;
+`KotlinxSerializationJsonSchemaCreator` is internally stateless (no `defs` map shared
+across calls — each `toSchema` allocates its own `DefinitionAccumulator`). Measured in
+a service on a warm JVM the per-request cost is a few milliseconds.
 
 ## Build & test
 
 - `mvn test` — unit + approval tests (`KotlinxSerializationJsonSchemaCreatorTest`,
-  `KotlinxOpenApi3RendererTest`). 47 tests.
+  `KotlinxOpenApi3RendererTest`). 91 tests.
 - `mvn verify` — full build (format check + tests).
 - `mvn spotless:apply` — apply ktfmt formatting.
 - `mvn versions:display-dependency-updates versions:display-parent-updates versions:display-property-updates`
@@ -174,6 +179,17 @@ Tests use `io.swagger.parser.v3:swagger-parser` to assert the rendered OpenAPI d
 parses cleanly (no schema-validity bugs slip through).
 
 ## Pitfalls / non-obvious bits
+
+- **Array body examples need http4k 6.59.0.0 or newer.** `OpenApi3` builds each
+  media-type example as `safeParse(message.bodyString())`, and `safeParse` swallows every
+  exception into `null`. `Json.parse` defaults to `asJsonObject(String)`, which in
+  `ConfigurableKotlinxSerialization` decodes with `JsonObject.serializer()` up to http4k
+  6.58 and so throws on `[...]`. Object bodies keep their example, `List<...>` bodies lose
+  it, with no error anywhere. 6.59.0.0 parses with `parseToJsonElement` and accepts
+  arrays. The format class comes from the adopter's own http4k, so this library cannot
+  fix it for them; the list-example tests in `KotlinxOpenApi3RendererTest` pin the
+  behaviour against the http4k version in `pom.xml`. A `Json` decorator overriding `parse`
+  was considered and rejected as public API that would outlive its purpose.
 
 - **DO NOT** rely on reflection for kotlinx.serialization DTOs. `@SerialName` is
   invisible to reflection; nullability is unreliable; sealed-class polymorphism breaks.

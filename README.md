@@ -191,6 +191,8 @@ val routes = contract {
 
 Passing `apiRenderer` as a named parameter forces Kotlin to use the `OpenApi3` primary constructor (which takes `Json<NODE>`). The secondary constructor takes `AutoMarshallingJson<NODE>` and has no `apiRenderer` parameter — it always uses `ApiRenderer.Auto`, which falls back to Jackson and defeats the point of this library.
 
+Array-typed body examples need http4k 6.59.0.0 or newer. `OpenApi3` re-parses every body example with `Json.parse` and silently drops it on failure, and http4k's kotlinx format rejects a top-level JSON array there in older versions, so on those any `List<...>` request or response body renders without its `example`.
+
 The renderer's `toSchema()` fallback chain mirrors `ApiRenderer.Auto`:
 1. Raw JSON bodies (`json.body().toLens()` with NODE examples) are handled via `JsonToJsonSchema`
 2. `@Serializable` DTOs are handled via `KotlinxSerializationJsonSchemaCreator`
@@ -246,7 +248,7 @@ val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
 | `TYPE_ARRAY` (default) | `{"type": ["string", "null"]}` | Plain `{"$ref": "..."}` (nullability not expressed) | Code generators (openapi-generator-cli, openapi-typescript, etc.) |
 | `ANYOF` | `{"anyOf": [{"type": "string"}, {"type": "null"}]}` | `{"anyOf": [{"$ref": "..."}, {"type": "null"}]}` | Strict JSON Schema validators that distinguish "absent" from "null" |
 
-**Why `TYPE_ARRAY` is the default**: The `anyOf` pattern, while semantically precise per OpenAPI 3.1 / JSON Schema 2020-12, is not handled correctly by `openapi-generator-cli` (the most widely used TypeScript code generator). It generates empty wrapper interfaces instead of proper nullable types. The `type` array form is equally valid OpenAPI 3.1 and produces correct output from all major generators.
+**Why `TYPE_ARRAY` is the default**: The `anyOf` pattern, while semantically precise per OpenAPI 3.1 / JSON Schema 2020-12, was seen to produce empty wrapper interfaces instead of proper nullable types from an earlier, unrecorded version of `openapi-generator-cli` (the most widely used TypeScript code generator). That does not reproduce with 7.21.0 or newer, which emit `T | null`. The `type` array form is equally valid OpenAPI 3.1 and produces correct output from all major generators, old and new.
 
 **Trade-off with `TYPE_ARRAY`**: For nullable `$ref` types (objects, enums, sealed classes), there is no `type` array to merge `"null"` into, so the `$ref` is emitted without a nullable wrapper and the schema says nothing about the field accepting `null`. If the field also has a Kotlin default it is absent from `required`, and TypeScript consumers — which treat optional and nullable identically (`field?: Type`) — end up with the right shape. If it has no default, it is still in `required` (see [Required fields and default values](#required-fields-and-default-values)) and the `null` case is not documented at all.
 
@@ -450,6 +452,8 @@ When the schema creator encounters a sealed class field, it needs example instan
 The default (`DefaultSealedClassExampleProvider`) looks for examples in two places:
 1. `object` subclasses (data objects) are used directly
 2. `data class` subclasses: looks for a `companion object` with an `example` property
+
+Sealed subtypes nested under the sealed parent are walked through, so leaves at any depth are found. The intermediate sealed type itself needs no companion.
 
 ```kotlin
 @Serializable

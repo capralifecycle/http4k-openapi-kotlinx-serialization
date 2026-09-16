@@ -27,7 +27,7 @@
     <major-version>1</major-version>
     <revision>${major-version}.local-SNAPSHOT</revision>
     <java.version>21</java.version>
-    <http4k.version>6.57.1.0</http4k.version>
+    <http4k.version>6.60.0.0</http4k.version>
     <kotlinx-serialization.version>1.11.0</kotlinx-serialization.version>
     <kotest.version>6.2.3</kotest.version>
   </properties>

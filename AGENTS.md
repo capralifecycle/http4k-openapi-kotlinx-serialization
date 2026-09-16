@@ -37,7 +37,7 @@ has no `module-info.java`, so the split package is a classpath detail only.
 ## Build & test
 
 ```bash
-mvn test            # unit + approval tests (47 tests)
+mvn test            # unit + approval tests (91 tests)
 mvn verify          # full build (spotless check + tests)
 mvn spotless:apply  # apply ktfmt formatting (run before committing)
 ```
@@ -67,7 +67,7 @@ property bump.
 
 ## Testing
 
-Unit tests only (47 tests, JUnit 5 + Kotest assertions, `swagger-parser` for OpenAPI
+Unit tests only (91 tests, JUnit 5 + Kotest assertions, `swagger-parser` for OpenAPI
 validation). Write tests as part of development; test code is source code; ROI matters
 — not everything is worth testing.
 
