@@ -13,10 +13,8 @@ import org.http4k.format.JsonType
  * [ApiRenderer] that combines http4k's manual JSON rendering for the OpenAPI document structure
  * with kotlinx.serialization-based JSON Schema generation for DTO models.
  *
- * The [toSchema] fallback chain mirrors [ApiRenderer.Auto]:
- * 1. Try [JsonToJsonSchema] for values that are already [NODE] (raw JSON bodies)
- * 2. Fall back to [KotlinxSerializationJsonSchemaCreator] for `@Serializable` DTOs
- * 3. Fall back to reflection-based enum schema for Java Enum constants
+ * [toSchema] tries [JsonToJsonSchema] for values that are already [NODE] (raw JSON bodies), as
+ * [ApiRenderer.Auto] does, and hands everything else to [KotlinxSerializationJsonSchemaCreator].
  *
  * Use this with [org.http4k.contract.openapi.v3.OpenApi3]'s primary constructor to render OpenAPI
  * documents without Jackson:
@@ -33,7 +31,7 @@ import org.http4k.format.JsonType
 class KotlinxOpenApi3Renderer<NODE : Any>(
     private val json: Json<NODE>,
     private val schema: KotlinxSerializationJsonSchemaCreator<NODE>,
-    private val refLocationPrefix: String = "components/schemas",
+    private val refLocationPrefix: String = schema.refLocationPrefix,
 ) : ApiRenderer<Api<NODE>, NODE> {
 
   private val delegate = OpenApi3ApiRenderer(json, refLocationPrefix)
@@ -57,30 +55,15 @@ class KotlinxOpenApi3Renderer<NODE : Any>(
       overrideDefinitionId: String?,
       refModelNamePrefix: String?,
   ): JsonSchema<NODE> {
-    // 1. Try JsonToJsonSchema for values that are already NODE (raw JSON bodies).
+    // The cast is erased, so it cannot fail here; a non-NODE value fails inside JsonToJsonSchema
+    // when it inspects the node. That is the same signal http4k's own ApiRenderer.Auto relies on.
     try {
       @Suppress("UNCHECKED_CAST")
       return jsonToJsonSchema.toSchema(obj as NODE, overrideDefinitionId, refModelNamePrefix)
     } catch (_: ClassCastException) {
-      // Not a NODE — fall through to kotlinx.serialization path.
+      return schema.toSchema(obj, overrideDefinitionId, refModelNamePrefix)
     }
-
-    // 2. Try KotlinxSerializationJsonSchemaCreator for @Serializable DTOs.
-    val result = schema.toSchema(obj, overrideDefinitionId, refModelNamePrefix)
-
-    // 3. If the schema creator returned an empty schema and the object is a Java Enum,
-    // fall back to reflection-based enum schema generation.
-    // This handles the case where OpenApi3 passes Java Enum constants for query/path
-    // parameter schemas (e.g. paramMeta.clz.java.enumConstants[0]).
-    if (isEmptySchema(result) && obj is Enum<*>) {
-      return toEnumSchema(obj, refModelNamePrefix, overrideDefinitionId)
-    }
-
-    return result
   }
-
-  private fun isEmptySchema(schema: JsonSchema<NODE>): Boolean =
-      schema.definitions.isEmpty() && json.fields(schema.node).none()
 
   /**
    * Recursively strips null values from JSON objects. http4k's [OpenApi3ApiRenderer] emits
@@ -145,33 +128,4 @@ class KotlinxOpenApi3Renderer<NODE : Any>(
           pattern.withIndex().all { (index, segment) ->
             segment == null || this[size - pattern.size + index] == segment
           }
-
-  private fun toEnumSchema(
-      obj: Enum<*>,
-      refModelNamePrefix: String?,
-      overrideDefinitionId: String?,
-  ): JsonSchema<NODE> {
-    // `javaClass` is a synthetic subclass for constants that declare a body - `isEnum` is false
-    // and `enumConstants` is null on it - so step up to the declaring class in that case.
-    val enumClass: Class<*> = obj.javaClass.let { if (it.isEnum) it else it.superclass }
-    val constants = enumClass.enumConstants.orEmpty().filterIsInstance<Enum<*>>()
-    val newDefinition =
-        json.obj(
-            "example" to json.string(obj.name),
-            "type" to json.string("string"),
-            "enum" to json.array(constants.map { json.string(it.name) }),
-        )
-    // Named after the type, not after [overrideDefinitionId]. See the enum note in
-    // [KotlinxSerializationJsonSchemaCreator.toSchema]: http4k passes a parameter name as the
-    // override, which would key this definition by the parameter rather than the enum.
-    val definitionId =
-        (refModelNamePrefix.orEmpty()) +
-            (enumClass.simpleName.ifEmpty { null }
-                ?: overrideDefinitionId
-                ?: ("object" + newDefinition.hashCode()))
-    return JsonSchema(
-        json { obj("\$ref" to string("#/$refLocationPrefix/$definitionId")) },
-        mapOf(definitionId to newDefinition),
-    )
-  }
 }

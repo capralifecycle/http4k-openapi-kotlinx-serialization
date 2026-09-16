@@ -25,19 +25,22 @@ has no `module-info.java`, so the split package is a classpath detail only.
 | File                                                                                  | What                                                              |
 | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `annotations/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/Description.kt` | `@Description`. No dependencies — keep it that way.               |
-| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinxSerializationJsonSchemaCreator.kt` | Core schema walker. Implements `JsonSchemaCreator<Any, NODE>`.    |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinxSerializationJsonSchemaCreator.kt` | Entry point. Implements `JsonSchemaCreator<Any, NODE>`; resolves the root example, runs one walk. |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/SchemaWalk.kt`                   | The descriptor traversal: one instance per `toSchema` call.       |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/DefinitionRegistry.kt`           | Collects definitions by identity; names them once after the walk. |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinDeclarations.kt`           | Reflection lookups the descriptor cannot answer.                  |
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/SealedClassExampleProvider.kt`   | `companion.example` discovery for sealed subclasses.              |
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/NullableStrategy.kt`             | `TYPE_ARRAY` (default) vs `ANYOF`.                                |
-| `core/src/main/kotlin/no/liflig/http4k/kotlinx/openapi/KotlinxOpenApi3Renderer.kt`         | `ApiRenderer` with NODE → kotlinx → Java-Enum fallback chain.     |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/openapi/KotlinxOpenApi3Renderer.kt`         | `ApiRenderer`: NODE shortcut, then kotlinx; strips nulls outside examples. |
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/openapi/OpenApi3WithKotlinx.kt`             | `openApi3WithKotlinx(...)` factory, wraps the renderer in `cached()`. |
 | `core/src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/TestDtos.kt`                     | Test DTOs covering primitives, nullables, sealed classes, maps.   |
-| `core/src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinxSerializationJsonSchemaCreatorTest.kt` | Approval tests; uses `swagger-parser` to validate rendered output. |
-| `core/src/test/kotlin/no/liflig/http4k/kotlinx/openapi/KotlinxOpenApi3RendererTest.kt`     | End-to-end renderer test (`openApi3WithKotlinx`).                 |
+| `core/src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/*Test.kt`                        | Schema tests by concern: structure, sealed, naming, annotations. Shared creators in `SchemaTestSupport.kt`. |
+| `core/src/test/kotlin/no/liflig/http4k/kotlinx/openapi/*Test.kt`                           | End-to-end via `openApi3WithKotlinx`, plus `ExamplePayloadTest`. Shared DTOs in `RendererTestSupport.kt`. |
 
 ## Build & test
 
 ```bash
-mvn test            # unit + approval tests (91 tests)
+mvn test            # unit + approval tests (93 tests)
 mvn verify          # full build (spotless check + tests)
 mvn spotless:apply  # apply ktfmt formatting (run before committing)
 ```
@@ -67,7 +70,7 @@ property bump.
 
 ## Testing
 
-Unit tests only (91 tests, JUnit 5 + Kotest assertions, `swagger-parser` for OpenAPI
+Unit tests only (93 tests, JUnit 5 + Kotest assertions, `swagger-parser` for OpenAPI
 validation). Write tests as part of development; test code is source code; ROI matters
 — not everything is worth testing.
 

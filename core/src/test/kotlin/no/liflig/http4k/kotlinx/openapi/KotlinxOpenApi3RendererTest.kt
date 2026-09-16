@@ -7,179 +7,25 @@ import io.kotest.matchers.maps.shouldNotBeEmpty
 import io.kotest.matchers.maps.shouldNotContainKey
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json as KotlinxJson
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import no.liflig.http4k.kotlinx.jsonschema.KotlinxSerializationJsonSchemaCreator
-import org.http4k.contract.contract
 import org.http4k.contract.meta
-import org.http4k.contract.openapi.ApiInfo
-import org.http4k.contract.openapi.v3.Api
-import org.http4k.contract.openapi.v3.ApiServer
-import org.http4k.contract.openapi.v3.Components
 import org.http4k.core.Body
 import org.http4k.core.Method.GET
 import org.http4k.core.Method.POST
 import org.http4k.core.Request
 import org.http4k.core.Response
 import org.http4k.core.Status.Companion.OK
-import org.http4k.core.Uri
-import org.http4k.format.KotlinxSerialization
 import org.http4k.format.KotlinxSerialization.auto
 import org.http4k.lens.Query
 import org.http4k.lens.enum
 import org.junit.jupiter.api.Test
 
+/** End-to-end rendering through `openApi3WithKotlinx`: bodies, parameters, enums, validity. */
 class KotlinxOpenApi3RendererTest {
-
-  @Serializable
-  data class CreateRequest(
-      val name: String,
-      val value: Int,
-  )
-
-  @Serializable
-  data class CreateResponse(
-      val id: String,
-      val created: Boolean,
-  )
-
-  @Serializable
-  data class NullableFieldDto(
-      val required: String,
-      val optional: String? = null,
-      val optionalEvent: EventPayload? = null,
-  )
-
-  @Serializable
-  sealed class EventPayload {
-    @Serializable @SerialName("created") data class Created(val name: String) : EventPayload()
-
-    @Serializable @SerialName("deleted") data object Deleted : EventPayload()
-
-    companion object {
-      val example: EventPayload = Created("test-item")
-    }
-  }
-
-  @Serializable
-  data class EventResponse(
-      val event: EventPayload,
-  )
-
-  @no.liflig.http4k.kotlinx.jsonschema.Description("A code, as the traffic systems write it.")
-  @Serializable
-  @JvmInline
-  value class DescribedCodeDto(val value: String)
-
-  @Serializable
-  data class DescribedPropertyDto(
-      @no.liflig.http4k.kotlinx.jsonschema.Description("What this field is for.")
-      val described: String,
-      val undescribed: String,
-      val fromType: DescribedCodeDto,
-      @no.liflig.http4k.kotlinx.jsonschema.Description("Described alongside a reference.")
-      val describedEvent: EventPayload,
-  )
-
-  @Suppress("DEPRECATION")
-  @Serializable
-  data class DeprecatedPropertyDto(
-      @Deprecated("Use replacement instead") val legacy: String,
-      val replacement: String,
-      @Deprecated("Use replacement instead") val legacyEvent: EventPayload,
-  )
-
-  @Suppress("DEPRECATION")
-  @Serializable
-  @SerialName("renamed_response")
-  data class RenamedResponseDto(
-      val id: String,
-      @Deprecated("Use code instead") val legacyCode: String,
-      val code: String,
-  )
-
-  enum class StatusFilter {
-    ACTIVE,
-    INACTIVE,
-    ALL,
-  }
-
-  @Serializable
-  enum class TaskStatus {
-    OPEN,
-    DONE,
-  }
-
-  @Serializable
-  data class TaskDto(
-      val id: String,
-      val status: TaskStatus,
-  )
-
-  /**
-   * Nullable, but without Kotlin defaults, so both fields are `required` and an example that omits
-   * them would not validate against the schema.
-   */
-  @Serializable
-  data class OverridesDto(
-      val overriddenName: String?,
-      val overriddenCount: Int?,
-  )
-
-  /** Carries a property whose name collides with the `example` key of a media-type object. */
-  @Serializable
-  data class ExampleNamedFieldDto(
-      val example: String?,
-      val label: String,
-  )
-
-  private val json = KotlinxSerialization
-
-  private val kotlinxJson = KotlinxJson { ignoreUnknownKeys = true }
-
-  private val schema =
-      KotlinxSerializationJsonSchemaCreator<JsonElement>(
-          json = json,
-          kotlinxJson = kotlinxJson,
-      )
-
-  private fun buildContract(block: org.http4k.contract.ContractBuilder.() -> Unit) = contract {
-    this.renderer =
-        openApi3WithKotlinx(
-            apiInfo = ApiInfo("Test API", "1.0.0"),
-            json = this@KotlinxOpenApi3RendererTest.json,
-            schema = this@KotlinxOpenApi3RendererTest.schema,
-            servers = listOf(ApiServer(Uri.of("http://localhost:8080"))),
-        )
-    block()
-  }
-
-  private fun fetchSpec(app: org.http4k.core.HttpHandler): kotlinx.serialization.json.JsonObject {
-    val response = app(Request(GET, "/"))
-    response.status.code shouldBe 200
-    return KotlinxJson.parseToJsonElement(response.bodyString()).jsonObject
-  }
-
-  /** Matches the body-example positions, the only ones allowed to hold a null. */
-  private val exampleBodyPath = Regex("""\.content\.[^.]+\.example(\.|$)""")
-
-  /** Dot-joined path of every JSON null in [element], array indices rendered as `[n]`. */
-  private fun nullPaths(element: JsonElement, path: String = ""): List<String> =
-      when (element) {
-        is JsonNull -> listOf(path)
-        is JsonObject -> element.entries.flatMap { (key, value) -> nullPaths(value, "$path.$key") }
-        is JsonArray -> element.flatMapIndexed { index, value -> nullPaths(value, "$path[$index]") }
-        else -> emptyList()
-      }
 
   @Test
   fun `renders openapi document without jackson`() {
@@ -293,6 +139,34 @@ class KotlinxOpenApi3RendererTest {
   }
 
   @Test
+  fun `renders enum query parameter whose constants declare bodies`() {
+    val priorityLens = Query.enum<Priority>().required("priority")
+
+    val app = buildContract {
+      routes +=
+          "/items" meta
+              {
+                summary = "List items"
+                queries += priorityLens
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val spec = fetchSpec(app)
+    val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
+
+    // Keyed by the enum type, not by the constant's anonymous class or the parameter name.
+    schemas shouldContainKey "Priority"
+    schemas shouldNotContainKey "priority"
+    schemas["Priority"]?.jsonObject?.get("enum")?.jsonArray?.map {
+      it.jsonPrimitive.content
+    } shouldBe listOf("HIGH", "LOW")
+  }
+
+  @Test
   fun `enum used as both query parameter and body field yields one component`() {
     val statusLens = Query.enum<TaskStatus>().required("status")
     val bodyLens = Body.auto<TaskDto>().toLens()
@@ -320,293 +194,6 @@ class KotlinxOpenApi3RendererTest {
     schemas shouldNotContainKey "status"
     schemas.keys.filter { it.contains("TaskStatus", ignoreCase = true) } shouldBe
         listOf("TaskStatus")
-  }
-
-  @Test
-  fun `null values in a response example are preserved`() {
-    val responseLens = Body.auto<OverridesDto>().toLens()
-
-    val app = buildContract {
-      routes +=
-          "/overrides" meta
-              {
-                summary = "Get overrides"
-                returning(
-                    OK,
-                    responseLens to OverridesDto(overriddenName = null, overriddenCount = 3),
-                )
-              } bindContract
-              GET to
-              { _ ->
-                Response(OK)
-              }
-    }
-
-    val spec = fetchSpec(app)
-
-    // The document-level null stripping must not reach into example payloads: `overriddenName` is
-    // required by the schema, so dropping it would leave the example failing its own validation.
-    val example =
-        spec["paths"]
-            ?.jsonObject
-            ?.get("/overrides")
-            ?.jsonObject
-            ?.get("get")
-            ?.jsonObject
-            ?.get("responses")
-            ?.jsonObject
-            ?.get("200")
-            ?.jsonObject
-            ?.get("content")
-            ?.jsonObject
-            ?.values
-            ?.first()
-            ?.jsonObject
-            ?.get("example")
-            ?.jsonObject
-    example.shouldNotBeNull()
-    example.keys shouldBe setOf("overriddenName", "overriddenCount")
-    example["overriddenName"] shouldBe JsonNull
-    example["overriddenCount"]?.jsonPrimitive?.content shouldBe "3"
-
-    val required =
-        spec["components"]
-            ?.jsonObject
-            ?.get("schemas")
-            ?.jsonObject
-            ?.get("OverridesDto")
-            ?.jsonObject
-            ?.get("required")
-            ?.jsonArray
-            ?.map { it.jsonPrimitive.content }
-    required shouldBe listOf("overriddenName", "overriddenCount")
-  }
-
-  @Test
-  fun `null scaffolding values are stripped from the document`() {
-    val renderer = KotlinxOpenApi3Renderer(json = json, schema = schema)
-
-    // The whole point of stripNullValues: a "description": null trips strict OpenAPI parsers.
-    // Driven through a hand-built document because http4k 6.57.1.0 guards every null-capable
-    // emission of its own (`description?.let`, non-null ApiPath.summary), so no route fixture can
-    // produce one — the strip defends against http4k versions that do not. The nulls sit at an
-    // object, a nested object and an array element to cover all three arms of the walk.
-    val schemas =
-        json.obj(
-            "WidgetDto" to
-                json.obj(
-                    "type" to json.string("object"),
-                    "description" to json.nullNode(),
-                    "properties" to
-                        json.obj(
-                            "name" to
-                                json.obj(
-                                    "type" to json.string("string"),
-                                    "description" to json.nullNode(),
-                                ),
-                        ),
-                    "oneOf" to
-                        json.array(
-                            listOf(
-                                json.obj(
-                                    "type" to json.string("object"),
-                                    "title" to json.nullNode(),
-                                ),
-                            ),
-                        ),
-                ),
-        )
-
-    val document =
-        renderer.api(
-            Api(
-                info = ApiInfo("Test API", "1.0.0"),
-                tags = emptyList(),
-                paths = emptyMap(),
-                components = Components(schemas = schemas, securitySchemes = json.obj()),
-                servers = listOf(ApiServer(Uri.of("http://localhost:8080"))),
-                webhooks = null,
-                openapi = "3.1.0",
-            ),
-        )
-
-    nullPaths(document) shouldBe emptyList()
-  }
-
-  @Test
-  fun `rendered document keeps nulls only inside example payloads`() {
-    // Nullable without defaults, so kotlinx encodes the nulls into the example rather than
-    // omitting them the way it does for fields that have one.
-    val responseLens = Body.auto<OverridesDto>().toLens()
-
-    val app = buildContract {
-      routes +=
-          "/overrides" meta
-              {
-                summary = "Get overrides"
-                returning(
-                    OK,
-                    responseLens to OverridesDto(overriddenName = null, overriddenCount = 3),
-                )
-              } bindContract
-              GET to
-              { _ ->
-                Response(OK)
-              }
-    }
-
-    val nulls = nullPaths(fetchSpec(app))
-
-    // The fixture serializes explicit nulls, so the walk has something to find — a document-wide
-    // "contains no null" assertion would fail on those, and on the "null" in the type arrays that
-    // NullableStrategy.TYPE_ARRAY renders for nullable primitives.
-    nulls.isEmpty() shouldBe false
-    nulls.filterNot { exampleBodyPath.containsMatchIn(it) } shouldBe emptyList()
-  }
-
-  @Test
-  fun `nulls under a schema property named example are stripped`() {
-    val renderer = KotlinxOpenApi3Renderer(json = json, schema = schema)
-
-    // A DTO property called "example" lands in components/schemas, where it is document structure
-    // rather than an example payload. The exemption keys off position, so this subtree is stripped
-    // like any other. Under a definition named "content" the property also completes a trailing
-    // content.<any>.example match, which is why the check anchors on requestBody / responses.
-    // Built by hand because the schema creator never emits nulls of its own.
-    val definitionIds = listOf("ConfigDto", "content")
-    val schemas =
-        json.obj(
-            definitionIds.map { definitionId ->
-              definitionId to
-                  json.obj(
-                      "type" to json.string("object"),
-                      "properties" to
-                          json.obj(
-                              "example" to
-                                  json.obj(
-                                      "type" to json.string("string"),
-                                      "description" to json.nullNode(),
-                                  ),
-                          ),
-                  )
-            },
-        )
-
-    val document =
-        renderer.api(
-            Api(
-                info = ApiInfo("Test API", "1.0.0"),
-                tags = emptyList(),
-                paths = emptyMap(),
-                components = Components(schemas = schemas, securitySchemes = json.obj()),
-                servers = listOf(ApiServer(Uri.of("http://localhost:8080"))),
-                webhooks = null,
-                openapi = "3.1.0",
-            ),
-        )
-
-    definitionIds.forEach { definitionId ->
-      val property =
-          document.jsonObject["components"]
-              ?.jsonObject
-              ?.get("schemas")
-              ?.jsonObject
-              ?.get(definitionId)
-              ?.jsonObject
-              ?.get("properties")
-              ?.jsonObject
-              ?.get("example")
-              ?.jsonObject
-      property.shouldNotBeNull()
-      property shouldNotContainKey "description"
-      property["type"]?.jsonPrimitive?.content shouldBe "string"
-    }
-  }
-
-  @Test
-  fun `null values in a request example are preserved`() {
-    val requestLens = Body.auto<OverridesDto>().toLens()
-
-    val app = buildContract {
-      routes +=
-          "/overrides" meta
-              {
-                summary = "Create overrides"
-                receiving(requestLens to OverridesDto(overriddenName = null, overriddenCount = 3))
-              } bindContract
-              POST to
-              { _ ->
-                Response(OK)
-              }
-    }
-
-    val spec = fetchSpec(app)
-
-    // Request bodies sit at requestBody.content.<media-type>.example rather than under responses,
-    // and are exempt from the strip for the same reason.
-    val example =
-        spec["paths"]
-            ?.jsonObject
-            ?.get("/overrides")
-            ?.jsonObject
-            ?.get("post")
-            ?.jsonObject
-            ?.get("requestBody")
-            ?.jsonObject
-            ?.get("content")
-            ?.jsonObject
-            ?.values
-            ?.first()
-            ?.jsonObject
-            ?.get("example")
-            ?.jsonObject
-    example.shouldNotBeNull()
-    example["overriddenName"] shouldBe JsonNull
-    example["overriddenCount"]?.jsonPrimitive?.content shouldBe "3"
-  }
-
-  @Test
-  fun `a payload property named example does not confuse the example exemption`() {
-    val responseLens = Body.auto<ExampleNamedFieldDto>().toLens()
-
-    val app = buildContract {
-      routes +=
-          "/example-named" meta
-              {
-                summary = "Property named example"
-                returning(OK, responseLens to ExampleNamedFieldDto(example = null, label = "x"))
-              } bindContract
-              GET to
-              { _ ->
-                Response(OK)
-              }
-    }
-
-    val spec = fetchSpec(app)
-
-    // Inside the payload the key is data, so its null survives — the position under
-    // content.<media-type>.example decides, not the name of the property it holds.
-    val example =
-        spec["paths"]
-            ?.jsonObject
-            ?.get("/example-named")
-            ?.jsonObject
-            ?.get("get")
-            ?.jsonObject
-            ?.get("responses")
-            ?.jsonObject
-            ?.get("200")
-            ?.jsonObject
-            ?.get("content")
-            ?.jsonObject
-            ?.values
-            ?.first()
-            ?.jsonObject
-            ?.get("example")
-            ?.jsonObject
-    example.shouldNotBeNull()
-    example["example"] shouldBe JsonNull
-    example["label"]?.jsonPrimitive?.content shouldBe "x"
   }
 
   @Test
@@ -932,102 +519,4 @@ class KotlinxOpenApi3RendererTest {
     paths shouldContainKey "/raw-array"
     requestExample(spec, "/raw-array", "post") shouldBe example
   }
-
-  @Test
-  fun `list response body keeps its example`() {
-    val listLens = Body.auto<List<CreateResponse>>().toLens()
-
-    val app = buildContract {
-      routes +=
-          "/items" meta
-              {
-                summary = "List items"
-                returning(
-                    OK,
-                    listLens to listOf(CreateResponse("id-1", true), CreateResponse("id-2", false)),
-                )
-              } bindContract
-              GET to
-              { _ ->
-                Response(OK)
-              }
-    }
-
-    val example = responseExample(fetchSpec(app), "/items", "get").shouldNotBeNull().jsonArray
-    example.map { it.jsonObject["id"]?.jsonPrimitive?.content } shouldBe listOf("id-1", "id-2")
-  }
-
-  @Test
-  fun `list request body keeps its example`() {
-    val listLens = Body.auto<List<CreateRequest>>().toLens()
-
-    val app = buildContract {
-      routes +=
-          "/items" meta
-              {
-                summary = "Create items"
-                receiving(listLens to listOf(CreateRequest("first", 1)))
-              } bindContract
-              POST to
-              { _ ->
-                Response(OK)
-              }
-    }
-
-    val example = requestExample(fetchSpec(app), "/items", "post").shouldNotBeNull().jsonArray
-    example.map { it.jsonObject["name"]?.jsonPrimitive?.content } shouldBe listOf("first")
-  }
-
-  @Test
-  fun `null values inside a list example are preserved`() {
-    val listLens = Body.auto<List<OverridesDto>>().toLens()
-
-    val app = buildContract {
-      routes +=
-          "/overrides" meta
-              {
-                summary = "List overrides"
-                returning(OK, listLens to listOf(OverridesDto(null, 3)))
-              } bindContract
-              GET to
-              { _ ->
-                Response(OK)
-              }
-    }
-
-    val example = responseExample(fetchSpec(app), "/overrides", "get").shouldNotBeNull().jsonArray
-    example.single().jsonObject["overriddenName"] shouldBe JsonNull
-  }
-
-  private fun requestExample(spec: JsonObject, path: String, method: String): JsonElement? =
-      spec["paths"]
-          ?.jsonObject
-          ?.get(path)
-          ?.jsonObject
-          ?.get(method)
-          ?.jsonObject
-          ?.get("requestBody")
-          ?.jsonObject
-          ?.get("content")
-          ?.jsonObject
-          ?.get("application/json")
-          ?.jsonObject
-          ?.get("example")
-
-  private fun responseExample(spec: JsonObject, path: String, method: String): JsonElement? =
-      spec["paths"]
-          ?.jsonObject
-          ?.get(path)
-          ?.jsonObject
-          ?.get(method)
-          ?.jsonObject
-          ?.get("responses")
-          ?.jsonObject
-          ?.get("200")
-          ?.jsonObject
-          ?.get("content")
-          ?.jsonObject
-          ?.get("application/json")
-          ?.jsonObject
-          ?.get("example")
 }

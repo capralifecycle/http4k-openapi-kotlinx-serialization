@@ -3,7 +3,18 @@ package no.liflig.http4k.kotlinx.jsonschema
 import kotlin.reflect.KClass
 import kotlin.reflect.full.*
 
+/**
+ * Supplies example instances for the leaves of a sealed hierarchy, from which the schema walker
+ * fills in `example` values on each subclass definition.
+ *
+ * Each returned example is matched to its subclass by the serial name of the example's own runtime
+ * class, not by position in the list or by the [getExamples] argument. Examples may come in any
+ * order and cover any subset of leaves; a leaf without one renders without example values.
+ */
 interface SealedClassExampleProvider {
+  /**
+   * Example instances for the leaves reachable from [sealedClass], through nested sealed levels.
+   */
   fun getExamples(sealedClass: KClass<*>): List<Any>
 }
 
