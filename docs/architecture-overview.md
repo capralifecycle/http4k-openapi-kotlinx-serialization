@@ -39,17 +39,24 @@ Single Maven module. Two packages:
 | `no.liflig.http4k.kotlinx.jsonschema`         | Schema generation from `SerialDescriptor` trees. Sealed-class example wiring.  |
 | `no.liflig.http4k.kotlinx.openapi`            | http4k `ApiRenderer` adapter + `openApi3WithKotlinx` factory.                  |
 
-Five source files total:
+Source files:
 
-- `KotlinxSerializationJsonSchemaCreator.kt` — core schema walker (implements http4k's
-  `JsonSchemaCreator<Any, NODE>`).
+- `KotlinxSerializationJsonSchemaCreator.kt` — the public entry point (implements http4k's
+  `JsonSchemaCreator<Any, NODE>`). Resolves the root example's serializer, JSON and
+  `KType`, then runs one `SchemaWalk` over a fresh `DefinitionRegistry`.
+- `SchemaWalk.kt` — the descriptor traversal. One instance per `toSchema` call; every
+  handler takes `(descriptor, jsonElement, kType)` and the per-call state lives in fields.
+- `DefinitionRegistry.kt` — collects definitions by identity during the walk and names
+  them once at the end (see Name resolution).
+- `KotlinDeclarations.kt` — the reflection lookups a descriptor cannot answer:
+  properties, annotations, class loading, sealed leaves.
 - `SealedClassExampleProvider.kt` — interface + `DefaultSealedClassExampleProvider` that
   discovers examples via `companion.example` on sealed leaves, walking through nested
   sealed levels.
 - `NullableStrategy.kt` — `TYPE_ARRAY` (default, generator-friendly) vs `ANYOF`
   (spec-strict).
-- `KotlinxOpenApi3Renderer.kt` — `ApiRenderer` with a three-step fallback chain (NODE
-  bodies → `@Serializable` DTOs → Java Enum reflection).
+- `KotlinxOpenApi3Renderer.kt` — `ApiRenderer`: tries `JsonToJsonSchema` for NODE bodies,
+  hands everything else to the creator, and strips nulls from the rendered document.
 - `OpenApi3WithKotlinx.kt` — `openApi3WithKotlinx(...)` factory; wraps the renderer in
   `cached()`.
 
@@ -61,13 +68,16 @@ Five source files total:
 2. **Step 1 — NODE shortcut.** Cast `obj as NODE` and try `JsonToJsonSchema`. Succeeds
    for raw JSON-tree bodies (`Json<NODE>`). On `ClassCastException`, fall through.
 3. **Step 2 — kotlinx path.** `KotlinxSerializationJsonSchemaCreator.toSchema(obj)`:
-   1. Resolve the serializer via `kotlinxJson.serializersModule.serializer(obj::class.java)`
-      and encode the example to a `JsonElement`. (Catches `SerializationException` from
-      http4k's `object {}` sentinel and returns an empty schema.)
-   2. Walk the `SerialDescriptor` recursively (`descriptorToSchema`), emitting:
+   1. `rootExample` resolves the serializer, encodes the example to a `JsonElement`, and
+      builds the root `KType`. A top-level collection or map is typed from its first entry.
+      An enum constant is looked up by its declaring enum, since a constant with a body is
+      an instance of a synthetic subclass that has no serializer. (`SerializationException`
+      from http4k's `object {}` sentinel yields an empty schema; any other propagates.)
+   2. `SchemaWalk.schemaFor` walks the `SerialDescriptor` recursively, emitting:
       - Primitives → `{"type": ...}` with optional `format` from `formatMappings`.
-      - Classes → `{"$ref": "#/components/schemas/<name>"}` and accumulate the
-        definition in `DefinitionAccumulator`.
+      - Classes → `{"$ref": ...}` via `DefinitionRegistry.define`, which builds and
+        stores the definition unless it already exists or is being built further up the
+        stack (recursion).
       - Lists / Maps / Enums / Sealed classes → kind-specific node shape (`oneOf` +
         `discriminator` for sealed).
       - Nullables → applied by `NullableStrategy`.
@@ -77,18 +87,13 @@ Five source files total:
    3. Use the encoded `JsonElement` in parallel to extract example values by field name
       (descriptor gives structure, JSON tree gives values — reflection alone can't
       because of `@SerialName` invisibility).
-   4. Apply `overrideDefinitionId` after collision resolution if set — **except for
-      enums**, which keep their serial name. http4k passes the *parameter* name as the
-      override when rendering an enum query/path parameter, so honouring it would key
-      the definition by the parameter (`status`) instead of the type (`TaskStatusDto`)
-      and duplicate the component whenever the same enum also appears in a body.
-4. **Step 3 — Enum fallback.** If step 2 returned an empty schema and `obj` is a Java
-   `Enum<*>` (http4k passes `paramMeta.clz.java.enumConstants[0]` for query/path enum
-   parameters), generate `{"type": "string", "enum": [...]}` via reflection, named after
-   the declaring class for the same reason. Read the constants off the declaring class,
-   not `javaClass` — the latter is a synthetic subclass for constants with a body, where
-   `enumConstants` is null.
-5. `OpenApi3` assembles all schemas into the final document and calls
+   4. `DefinitionRegistry.finish` names every definition and rewrites the refs (see Name
+      resolution). `overrideDefinitionId` renames the root — **except for enums**, which
+      keep their serial name. http4k passes the *parameter* name as the override when
+      rendering an enum query/path parameter, so honouring it would key the definition by
+      the parameter (`status`) instead of the type (`TaskStatusDto`) and duplicate the
+      component whenever the same enum also appears in a body.
+4. `OpenApi3` assembles all schemas into the final document and calls
    `KotlinxOpenApi3Renderer.api(api)`, which delegates to `OpenApi3ApiRenderer` then
    **strips null fields** (http4k emits `"description": null` for unset descriptions,
    which is invalid OpenAPI). Two positions are exempt —
@@ -147,13 +152,22 @@ with a `serialName` but no OpenAPI `format`. Pass `formatMappings` (or
 `UUID` → `uuid`, etc.). Matching is on the short name (after the last `.`) of the
 descriptor's `serialName`.
 
-## Name-collision resolution
+## Name resolution
 
-Definition names default to the `@Serializable` class short name (or `@SerialName` if
-present), e.g. `com.example.UserDto` → `UserDto`. On collision (different `serialName`,
-same short name), both the existing and new definitions are re-keyed to full
-underscore-separated names (`com_example_UserDto`). `refModelNamePrefix` is applied
-**after** collision resolution.
+During the walk, `DefinitionRegistry` keys every definition, and writes every `$ref`, by
+its *identity*: the serial name, or for sealed parents and subclasses the qualified class
+name. Identities are unique by construction, so nothing collides while walking.
+
+`finish` then assigns published names in one pass. A definition whose short name (the
+part after the last `.`) no other definition shares gets the short name:
+`com.example.UserDto` → `UserDto`. Where two or more share it, each gets its identity
+with `.` replaced by `_` (`com_example_UserDto`). `refModelNamePrefix` is prepended to
+every name, and `overrideDefinitionId` replaces the root's. Finally every ref in the root
+node and the definitions is rewritten from identity path to published path.
+
+Naming once, after the walk, is what keeps this simple: an earlier design named
+definitions as they were registered, and a later collision then had to evict the earlier
+entry and repair refs already emitted into parents on the call stack.
 
 ## Caching
 
@@ -161,14 +175,15 @@ underscore-separated names (`com_example_UserDto`). `refModelNamePrefix` is appl
 memoises only the final `api(model)` step: `OpenApi3` still builds its `Api` model on
 every request to `/openapi-schema.json`, which calls `toSchema` for every body. So
 `KotlinxOpenApi3Renderer.api` runs once per process while `toSchema` runs per request;
-`KotlinxSerializationJsonSchemaCreator` is internally stateless (no `defs` map shared
-across calls — each `toSchema` allocates its own `DefinitionAccumulator`). Measured in
+`KotlinxSerializationJsonSchemaCreator` is internally stateless (each `toSchema`
+allocates its own `SchemaWalk` and `DefinitionRegistry`). Measured in
 a service on a warm JVM the per-request cost is a few milliseconds.
 
 ## Build & test
 
-- `mvn test` — unit + approval tests (`KotlinxSerializationJsonSchemaCreatorTest`,
-  `KotlinxOpenApi3RendererTest`). 91 tests.
+- `mvn test` — unit + approval tests, split by concern: schema structure, sealed
+  hierarchies, definition naming and property annotations under `jsonschema`; end-to-end
+  rendering and example payloads under `openapi`. 93 tests.
 - `mvn verify` — full build (format check + tests).
 - `mvn spotless:apply` — apply ktfmt formatting.
 - `mvn versions:display-dependency-updates versions:display-parent-updates versions:display-property-updates`
@@ -229,10 +244,15 @@ parses cleanly (no schema-validity bugs slip through).
   `Class.forName`, which takes a *binary* name: a nested type is `Outer$Inner`, while its
   serial name is dotted (`com.example.Outer.Inner`). The lookup therefore fails for any
   nested declaration and, since both failure branches return `null`, does so silently —
-  a `@Description` on a nested enum simply never appears. `classToSchema` was never
-  affected because it tries `kType?.classifier` first; `enumToSchema` originally had no
-  `KType` to try, which is why it had to be threaded one. Anything else resolving a class
-  from a serial name alone inherits the same hole.
+  a `@Description` on a nested enum simply never appears. `kClassOf(kType, serialName)`
+  encodes the right order and is the only way the walk resolves a class; the enum handler
+  once had no `KType` to try, which is why one is threaded everywhere.
+- **Enum constants with bodies are instances of a synthetic subclass.** http4k passes
+  `enumConstants[0]` for a query or path enum parameter. When that constant declares a
+  body, its runtime class is `Priority$HIGH`, a named (not anonymous) subclass with no
+  serializer, and asking kotlinx for one throws. `rootExample` therefore resolves the
+  serializer and `KType` from the declaring enum. A renderer-side Java-enum fallback used
+  to exist for this and never ran, because it waited for the anonymous-class sentinel.
 - **`@Transient` fields disappear silently** — kotlinx.serialization's compiler plugin
   excludes them from both the descriptor and the encoded JSON. No special handling
   required; they simply don't appear in schemas.
@@ -243,22 +263,21 @@ parses cleanly (no schema-validity bugs slip through).
   Contract routes **do** pass bare `List<T>` at the top level in practice (a list-returning
   endpoint whose example is a `List<Dto>`). `obj::class.starProjectedType` is useless there —
   it yields `ArrayList<*>`, whose single argument is a star projection with a `null` `type`,
-  so `listToSchema` would have nothing to thread to its elements and `ownerKClass` in
+  so the list handler would have nothing to thread to its elements and `ownerKClass` in
   `buildObjectProperties` would be `null`. Anything needing the Kotlin declaration rather
   than the descriptor (property annotations, inline value class inner types) then silently
-  degrades. `resolveRootKType` avoids that by building the root type from the first entry's
-  runtime class — the same source `resolveSerializerAndEncode` already uses for element
-  serializers.
+  degrades. `rootExample` avoids that by building the root type from the first entry's
+  runtime class — the same source it uses for the element serializer.
 
-  This matters across routes, not just within one walk. `DefinitionAccumulator` and
-  `visited` are created per `toSchema` call, so each route builds its own definitions
+  This matters across routes, not just within one walk. The `DefinitionRegistry` is
+  created per `toSchema` call, so each route builds its own definitions
   independently; http4k concatenates all of them —
   `Components(json.obj(pathDefs + webhookPathDefs), …)` in `OpenApi3` — and settles a
   duplicate key by map-build order. A DTO reachable both directly *and* as a list element
   would otherwise produce two different definitions, with route order picking the winner.
   Both paths now start from a real element type, so they agree.
 
-  `buildObjectProperties` still falls back to `Class.forName(descriptor.serialName)` when no
+  `buildObjectProperties` still falls back to `loadKClass(descriptor.serialName)` when no
   `KType` arrived at all. After the above, that is a genuine last resort — a property whose
   declared type is a generic type parameter — and it resolves nothing for a class-level
   `@SerialName`. See `loadKClass` for the case it resolves wrongly.

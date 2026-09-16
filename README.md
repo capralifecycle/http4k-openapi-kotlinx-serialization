@@ -193,10 +193,7 @@ Passing `apiRenderer` as a named parameter forces Kotlin to use the `OpenApi3` p
 
 Array-typed body examples need http4k 6.59.0.0 or newer. `OpenApi3` re-parses every body example with `Json.parse` and silently drops it on failure, and http4k's kotlinx format rejects a top-level JSON array there in older versions, so on those any `List<...>` request or response body renders without its `example`.
 
-The renderer's `toSchema()` fallback chain mirrors `ApiRenderer.Auto`:
-1. Raw JSON bodies (`json.body().toLens()` with NODE examples) are handled via `JsonToJsonSchema`
-2. `@Serializable` DTOs are handled via `KotlinxSerializationJsonSchemaCreator`
-3. Java Enum constants (for query/path parameters) are handled via reflection-based enum schema generation
+The renderer's `toSchema()` first tries `JsonToJsonSchema` for raw JSON bodies (`json.body().toLens()` with NODE examples), as `ApiRenderer.Auto` does, and hands everything else to `KotlinxSerializationJsonSchemaCreator`. That includes the enum constants http4k passes for query and path parameters, constants with bodies included.
 
 ### Format mappings
 
