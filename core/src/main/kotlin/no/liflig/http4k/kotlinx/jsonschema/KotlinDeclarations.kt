@@ -64,6 +64,15 @@ internal fun loadKClass(serialName: String): KClass<*>? =
       null
     }
 
+/**
+ * The class a descriptor stands for: the [KType] threaded through the walk when it names a class,
+ * else the class loaded from [serialName]. The KType first, because [loadKClass] cannot resolve a
+ * nested type's dotted serial name against its `Outer$Inner` binary name, and because a class-level
+ * `@SerialName` is not a class name at all.
+ */
+internal fun kClassOf(kType: KType?, serialName: String): KClass<*>? =
+    (kType?.classifier as? KClass<*>) ?: loadKClass(serialName)
+
 /** Resolves the inner type of an inline value class. */
 internal fun resolveInlineInnerType(kType: KType?): KType? {
   val kClass = kType?.classifier as? KClass<*> ?: return null

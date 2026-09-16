@@ -5,7 +5,6 @@ import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
 import kotlin.reflect.full.starProjectedType
 import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.PolymorphicKind
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -120,11 +119,7 @@ internal class SchemaWalk<NODE : Any>(
               "type" to json.string("string"),
               "enum" to json.array(elementNames.map { json.string(it) }),
           ),
-          // The KType first, as in classToSchema: loadKClass goes through
-          // Class.forName, which cannot resolve a nested enum's dotted serial name
-          // against its `Outer$Inner` binary name and would silently drop the
-          // description.
-          (kType?.classifier as? KClass<*>) ?: loadKClass(serialName),
+          kClassOf(kType, serialName),
       )
     }
   }
@@ -136,19 +131,9 @@ internal class SchemaWalk<NODE : Any>(
       kType: KType?,
   ): NODE {
     return registry.define(serialName, serialName.substringAfterLast('.')) {
-      val (properties, requiredFields) =
-          buildObjectProperties(descriptor, jsonElement as? JsonObject, kType)
-
-      val schemaFields = mutableListOf<Pair<String, NODE>>()
-      schemaFields.add("type" to json.string("object"))
-      schemaFields.add("properties" to json.obj(properties))
-      if (requiredFields.isNotEmpty()) {
-        schemaFields.add("required" to json.array(requiredFields.map { json.string(it) }))
-      }
-
       withClassDescription(
-          json.obj(schemaFields),
-          (kType?.classifier as? KClass<*>) ?: loadKClass(serialName),
+          buildObjectProperties(descriptor, jsonElement as? JsonObject, kType).toSchema(),
+          kClassOf(kType, serialName),
       )
     }
   }
@@ -325,14 +310,35 @@ internal class SchemaWalk<NODE : Any>(
     }
   }
 
+  /**
+   * The members of an object schema: its properties in declaration order and the required names.
+   */
+  private inner class ObjectMembers(
+      val properties: List<Pair<String, NODE>>,
+      val required: List<String>,
+  ) {
+    operator fun plus(other: ObjectMembers) =
+        ObjectMembers(properties + other.properties, required + other.required)
+
+    fun toSchema(): NODE =
+        json.obj(
+            listOfNotNull(
+                "type" to json.string("object"),
+                "properties" to json.obj(properties),
+                if (required.isEmpty()) null
+                else "required" to json.array(required.map { json.string(it) }),
+            )
+        )
+  }
+
   private fun buildObjectProperties(
       descriptor: SerialDescriptor,
       jsonObj: JsonObject?,
       kType: KType?,
-  ): Pair<List<Pair<String, NODE>>, List<String>> {
+  ): ObjectMembers {
+    val ownerKClass = kClassOf(kType, descriptor.serialName)
     val properties = mutableListOf<Pair<String, NODE>>()
-    val requiredFields = mutableListOf<String>()
-    val ownerKClass = (kType?.classifier as? KClass<*>) ?: loadKClass(descriptor.serialName)
+    val required = mutableListOf<String>()
 
     for (i in 0 until descriptor.elementsCount) {
       val elementName = descriptor.getElementName(i)
@@ -344,7 +350,6 @@ internal class SchemaWalk<NODE : Any>(
               jsonObj?.get(elementName),
               property?.returnType,
           )
-
       val describedSchema =
           descriptionOf(property, elementSchema)?.let { withDescription(elementSchema, it) }
               ?: elementSchema
@@ -353,13 +358,12 @@ internal class SchemaWalk<NODE : Any>(
           elementName to
               if (isDeprecated(property)) withDeprecatedMarker(describedSchema) else describedSchema
       )
-
       if (!descriptor.isElementOptional(i)) {
-        requiredFields.add(elementName)
+        required.add(elementName)
       }
     }
 
-    return properties to requiredFields
+    return ObjectMembers(properties, required)
   }
 
   private fun sealedToSchema(
@@ -370,7 +374,21 @@ internal class SchemaWalk<NODE : Any>(
     require(descriptor.elementsCount >= 2) {
       "Unexpected SEALED descriptor structure: elementsCount=${descriptor.elementsCount}"
     }
+    val sealedKClass =
+        kClassOf(kType, serialName)
+            ?: throw IllegalStateException(
+                "Cannot load sealed class '$serialName' for example discovery. " +
+                    "Ensure the class is on the classpath or has a resolvable owner type."
+            )
+    return registry.define(
+        sealedKClass.qualifiedName ?: serialName,
+        sealedKClass.simpleName ?: serialName.substringAfterLast('.'),
+    ) {
+      sealedParentSchema(descriptor, sealedKClass)
+    }
+  }
 
+  private fun sealedParentSchema(descriptor: SerialDescriptor, sealedKClass: KClass<*>): NODE {
     // Discriminator name: prefer @JsonClassDiscriminator on the sealed parent (which the
     // JSON encoder uses at runtime), fall back to the global Json.classDiscriminator config.
     // Reading descriptor.getElementName(0) would always return the SealedClassSerializer's
@@ -381,122 +399,84 @@ internal class SchemaWalk<NODE : Any>(
             .firstOrNull()
             ?.discriminator ?: kotlinxJson.configuration.classDiscriminator
 
-    val subclassContainerDescriptor = descriptor.getElementDescriptor(1)
-
-    val sealedKClass =
-        try {
-          Class.forName(serialName).kotlin
-        } catch (_: ClassNotFoundException) {
-          // @SerialName on the sealed parent makes serialName differ from the FQ class name.
-          // Fall back to the KType threaded through the traversal.
-          (kType?.classifier as? KClass<*>)
-              ?: throw IllegalStateException(
-                  "Cannot load sealed class '${serialName}' for example discovery. " +
-                      "Ensure the class is on the classpath or has a resolvable owner type.",
-              )
-        }
-    val parentIdentity = sealedKClass.qualifiedName ?: serialName
-    val parentShortName = sealedKClass.simpleName ?: serialName.substringAfterLast('.')
-    return registry.define(parentIdentity, parentShortName) {
-      sealedParentSchema(subclassContainerDescriptor, classDiscriminator, sealedKClass)
-    }
-  }
-
-  private fun sealedParentSchema(
-      subclassContainerDescriptor: SerialDescriptor,
-      classDiscriminator: String,
-      sealedKClass: KClass<*>,
-  ): NODE {
-    val examples = sealedClassExampleProvider.getExamples(sealedKClass)
+    // The descriptor only carries each subclass's @SerialName, which can repeat across
+    // hierarchies. The leaf KClass supplies what the descriptor cannot: a unique identity, the
+    // simple name, and the KType for property traversal.
+    val leavesBySerialName = collectLeafSubclasses(sealedKClass).associateBy { serialNameOf(it) }
     val examplesBySerialName =
-        examples.associateBy { example ->
-          kotlinxJson.serializersModule.serializer(example::class.java).descriptor.serialName
-        }
+        sealedClassExampleProvider.getExamples(sealedKClass).associateBy { serialNameOf(it::class) }
 
-    // Map @SerialName values to Kotlin class names and KClasses to avoid definition key
-    // collisions when multiple sealed hierarchies share the same @SerialName discriminator values,
-    // and to thread KType context to subclass property traversal.
-    val leafSubclasses = collectLeafSubclasses(sealedKClass)
-    val subclassClassNames: Map<String, String> =
-        leafSubclasses.associate { subclass ->
-          val serializer = kotlinxJson.serializersModule.serializer(subclass.java)
-          serializer.descriptor.serialName to subclass.simpleName!!
-        }
-    val subclassKClasses: Map<String, KClass<*>> =
-        leafSubclasses.associate { subclass ->
-          val serializer = kotlinxJson.serializersModule.serializer(subclass.java)
-          serializer.descriptor.serialName to subclass
-        }
-
-    val oneOfRefs = mutableListOf<NODE>()
-    val discriminatorMapping = mutableMapOf<String, String>()
-
-    for (i in 0 until subclassContainerDescriptor.elementsCount) {
-      val subclassDescriptor = subclassContainerDescriptor.getElementDescriptor(i)
-      val discriminatorValue = subclassDescriptor.serialName
-      val shortName =
-          subclassClassNames[discriminatorValue] ?: discriminatorValue.substringAfterLast('.')
-
-      val example = examplesBySerialName[discriminatorValue]
-      val exampleJson =
-          example?.let {
-            @Suppress("UNCHECKED_CAST")
-            kotlinxJson.encodeToJsonElement(
-                kotlinxJson.serializersModule.serializer(it::class.java) as KSerializer<Any>,
-                it,
-            ) as? JsonObject
-          }
-
-      val properties = mutableListOf<Pair<String, NODE>>()
-      val requiredFields = mutableListOf<String>()
-
-      properties.add(
-          classDiscriminator to
-              json.obj(
-                  "type" to json.string("string"),
-                  "enum" to json.array(listOf(json.string(discriminatorValue))),
-              )
-      )
-      requiredFields.add(classDiscriminator)
-
-      val subclassKType = subclassKClasses[discriminatorValue]?.starProjectedType
-      val (subclassProperties, subclassRequiredFields) =
-          buildObjectProperties(subclassDescriptor, exampleJson, subclassKType)
-      properties.addAll(subclassProperties)
-      requiredFields.addAll(subclassRequiredFields)
-
-      val schemaFields = mutableListOf<Pair<String, NODE>>()
-      schemaFields.add("type" to json.string("object"))
-      schemaFields.add("properties" to json.obj(properties))
-      if (requiredFields.isNotEmpty()) {
-        schemaFields.add("required" to json.array(requiredFields.map { json.string(it) }))
-      }
-
-      val subclassSchema =
-          withClassDescription(json.obj(schemaFields), subclassKClasses[discriminatorValue])
-
-      // Use the subclass's qualified class name (not the @SerialName discriminator value)
-      // as the identity passed to the registry. The discriminator value can be reused
-      // across sealed hierarchies (e.g. two unrelated trees both with a `@SerialName("created")`
-      // subclass); FQCN keeps them distinct and lets collision resolution rename when
-      // their simple names also collide.
-      val subclassIdentity =
-          subclassKClasses[discriminatorValue]?.qualifiedName ?: discriminatorValue
-      oneOfRefs.add(registry.define(subclassIdentity, shortName) { subclassSchema })
-      discriminatorMapping[discriminatorValue] = registry.refPath(subclassIdentity)
-    }
+    val subclassContainer = descriptor.getElementDescriptor(1)
+    val identityByDiscriminator =
+        (0 until subclassContainer.elementsCount)
+            .map { subclassContainer.getElementDescriptor(it) }
+            .associate { subclass ->
+              subclass.serialName to
+                  defineSealedSubclass(
+                      subclass,
+                      classDiscriminator,
+                      leavesBySerialName[subclass.serialName],
+                      examplesBySerialName[subclass.serialName],
+                  )
+            }
 
     return withClassDescription(
         json.obj(
-            "oneOf" to json.array(oneOfRefs),
+            "oneOf" to json.array(identityByDiscriminator.values.map { registry.ref(it) }),
             "discriminator" to
                 json.obj(
                     "propertyName" to json.string(classDiscriminator),
                     "mapping" to
-                        json.obj(discriminatorMapping.map { (k, v) -> k to json.string(v) }),
+                        json.obj(
+                            identityByDiscriminator.map { (value, identity) ->
+                              value to json.string(registry.refPath(identity))
+                            }
+                        ),
                 ),
         ),
         sealedKClass,
     )
   }
+
+  /** Registers the definition for one sealed subclass and returns its identity. */
+  private fun defineSealedSubclass(
+      descriptor: SerialDescriptor,
+      classDiscriminator: String,
+      leaf: KClass<*>?,
+      example: Any?,
+  ): String {
+    val discriminatorValue = descriptor.serialName
+    // The identity is the qualified class name, not the discriminator value: two unrelated
+    // hierarchies can both have a `@SerialName("created")` subclass, and the class name keeps
+    // them distinct while letting naming disambiguate when the simple names collide too.
+    val identity = leaf?.qualifiedName ?: discriminatorValue
+    registry.define(identity, leaf?.simpleName ?: discriminatorValue.substringAfterLast('.')) {
+      val exampleJson =
+          example?.let {
+            kotlinxJson.encodeToJsonElement(
+                kotlinxJson.serializersModule.serializer(it::class.java),
+                it,
+            ) as? JsonObject
+          }
+      val discriminatorMember =
+          ObjectMembers(
+              listOf(
+                  classDiscriminator to
+                      json.obj(
+                          "type" to json.string("string"),
+                          "enum" to json.array(listOf(json.string(discriminatorValue))),
+                      )
+              ),
+              listOf(classDiscriminator),
+          )
+      val members =
+          discriminatorMember +
+              buildObjectProperties(descriptor, exampleJson, leaf?.starProjectedType)
+      withClassDescription(members.toSchema(), leaf)
+    }
+    return identity
+  }
+
+  private fun serialNameOf(kClass: KClass<*>): String =
+      kotlinxJson.serializersModule.serializer(kClass.java).descriptor.serialName
 }
