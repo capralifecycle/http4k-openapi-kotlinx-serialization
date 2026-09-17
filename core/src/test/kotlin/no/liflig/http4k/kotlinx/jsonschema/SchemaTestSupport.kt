@@ -23,6 +23,17 @@ internal val schemaCreatorWithFormats =
         formatMappings = KotlinxSerializationJsonSchemaCreator.COMMON_FORMAT_MAPPINGS,
     )
 
+internal val kotlinxJsonEncodeDefaults = KotlinxJson {
+  ignoreUnknownKeys = true
+  encodeDefaults = true
+}
+
+internal val schemaCreatorEncodeDefaults =
+    KotlinxSerializationJsonSchemaCreator<JsonElement>(
+        json = KotlinxSerialization,
+        kotlinxJson = kotlinxJsonEncodeDefaults,
+    )
+
 internal val prettyJson = KotlinxJson { prettyPrint = true }
 
 internal fun prettyPrint(schema: org.http4k.contract.jsonschema.JsonSchema<JsonElement>): String {

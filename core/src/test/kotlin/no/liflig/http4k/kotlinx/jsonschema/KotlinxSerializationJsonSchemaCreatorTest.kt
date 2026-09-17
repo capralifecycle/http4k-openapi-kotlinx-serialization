@@ -141,14 +141,19 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
-  fun `renders schema for optional fields with defaults`() {
+  fun `renders schema for optional fields with defaults (encodeDefaults disabled)`() {
     val schema = schemaCreator.toSchema(OptionalFieldDto.example)
 
     val definition = schema.definitions["OptionalFieldDto"] as JsonObject
     val required = definition["required"] as JsonArray
     val requiredList = required.map { (it as JsonPrimitive).content }
 
-    requiredList shouldBe listOf("required", "requiredWithDefault")
+    // With encodeDefaults disabled, a value equal to its default is omitted from the wire, so
+    // every field stays required. See DefaultValueTest for the encodeDefaults = true behaviour.
+    requiredList shouldBe listOf("required", "withDefault", "withDefaultInt", "requiredWithDefault")
+
+    val properties = definition["properties"] as JsonObject
+    (properties["withDefault"] as JsonObject)["default"] shouldBe null
   }
 
   @Test
@@ -265,15 +270,22 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
-  fun `renders schema for nullable fields with defaults`() {
+  fun `renders schema for nullable fields with defaults (encodeDefaults disabled)`() {
     val schema = schemaCreator.toSchema(NullableWithDefaultDto.example)
 
     val definition = schema.definitions["NullableWithDefaultDto"] as JsonObject
     val required = definition["required"] as JsonArray
     val requiredList = required.map { (it as JsonPrimitive).content }
 
-    // Only "required" should be required (not nullable, no default)
-    requiredList shouldBe listOf("required")
+    // With encodeDefaults disabled, defaulted fields (nullable or not) stay required. See
+    // DefaultValueTest for the encodeDefaults = true behaviour.
+    requiredList shouldBe
+        listOf(
+            "required",
+            "optionalNullable",
+            "optionalNullableInner",
+            "optionalWithNonNullDefault",
+        )
 
     val properties = definition["properties"] as JsonObject
 
@@ -307,15 +319,16 @@ class KotlinxSerializationJsonSchemaCreatorTest {
   }
 
   @Test
-  fun `renders schema for lists with defaults`() {
+  fun `renders schema for lists with defaults (encodeDefaults disabled)`() {
     val schema = schemaCreator.toSchema(ListWithDefaultDto.example)
 
     val definition = schema.definitions["ListWithDefaultDto"] as JsonObject
     val required = definition["required"] as JsonArray
     val requiredList = required.map { (it as JsonPrimitive).content }
 
-    // Only "required" field should be in required list
-    requiredList shouldBe listOf("required")
+    // With encodeDefaults disabled, defaulted list fields stay required too. See
+    // DefaultValueTest for the encodeDefaults = true behaviour.
+    requiredList shouldBe listOf("required", "tags", "items")
 
     val properties = definition["properties"] as JsonObject
 

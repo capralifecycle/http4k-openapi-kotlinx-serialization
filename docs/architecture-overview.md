@@ -314,6 +314,24 @@ parses cleanly (no schema-validity bugs slip through).
   `{"type": ["string", "null"]}` accepts the null. This is the documented `TYPE_ARRAY`
   trade-off surfacing in examples rather than a separate defect; `NullableStrategy.ANYOF`
   makes both the schema and the example consistent.
+- **`required` vs. a property's `default` value tracks `encodeDefaults`, not just
+  whether the Kotlin property has a default.** `descriptor.isElementOptional(i)` is true
+  for any property with a Kotlin default (unless annotated `@Required`), but that alone
+  doesn't tell you what a consumer can rely on: under `encodeDefaults = false` (the
+  kotlinx.serialization default) a value equal to its default is omitted from the wire, so
+  the field is only reliably present when the caller sets it — it stays `required`. Under
+  `encodeDefaults = true` the encoder always emits it, so the field is safe to omit on
+  write and is marked optional, with its actual default surfaced as the JSON Schema
+  `default` keyword. `buildObjectProperties` reads `kotlinxJson.configuration.encodeDefaults`
+  to decide. The default's *value* isn't available from the descriptor (Kotlin default
+  expressions aren't reflectable), so `defaultValueOf` recovers it generically: decode the
+  current jsonObj with that one key removed (kotlinx fills the omitted key with the real
+  default regardless of `encodeDefaults` — that flag only governs encoding), then re-encode
+  the decoded instance with the same (encodeDefaults = true, by construction here)
+  `kotlinxJson` and read the field back out. A `null` default is deliberately never emitted
+  as `"default": null` — it would be indistinguishable from scaffolding and stripped by
+  `KotlinxOpenApi3Renderer`'s null-stripping pass outside example payloads (see below), so
+  it's silently omitted instead, same as a missing example.
 - **Empty-schema sentinel from http4k.** http4k calls `toSchema(object {})` in
   `exampleSchemaIsValid` to test the comparator path. Resolving a serializer for an
   anonymous object throws `SerializationException`; the schema creator catches and

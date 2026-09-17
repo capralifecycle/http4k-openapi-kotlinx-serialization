@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.serializer
 import org.http4k.format.Json
 import org.http4k.format.JsonType
@@ -219,6 +220,42 @@ internal class SchemaWalk<NODE : Any>(
   private fun withDescription(schema: NODE, description: String): NODE =
       schema.plusField("description", json.string(description))
 
+  private fun withDefaultValue(schema: NODE, value: JsonElement): NODE =
+      schema.plusField("default", convertJsonElement(value))
+
+  /**
+   * The Kotlin default value for [elementName], as actually assigned by the constructor — not the
+   * current example's value, which may differ from the default.
+   *
+   * Decodes [jsonObj] with [elementName] removed, using the owning class's own serializer: kotlinx
+   * fills the omitted key with its real default regardless of `encodeDefaults` (that flag only
+   * governs encoding). Re-encoding the decoded instance with the same [kotlinxJson] — which the
+   * caller has already established has `encodeDefaults = true` — then always includes the filled-in
+   * field, so its value can be read straight back out. No per-type value handling needed.
+   *
+   * Returns null (silently degrading to "optional, no default shown") when there is no concrete
+   * example to decode from, no resolvable class, decoding fails, or the default is `null` — a
+   * `"default": null` alongside other schema fields would be stripped by
+   * [no.liflig.http4k.kotlinx.openapi.KotlinxOpenApi3Renderer]'s null-stripping pass outside
+   * example payloads, so it is omitted here rather than emitted and silently dropped later.
+   */
+  private fun defaultValueOf(
+      ownerKClass: KClass<*>?,
+      jsonObj: JsonObject?,
+      elementName: String,
+  ): JsonElement? {
+    if (ownerKClass == null || jsonObj == null) return null
+    return try {
+      val serializer = kotlinxJson.serializersModule.serializer(ownerKClass.java)
+      val probe = JsonObject(jsonObj.filterKeys { it != elementName })
+      val decoded = kotlinxJson.decodeFromJsonElement(serializer, probe)
+      val reEncoded = kotlinxJson.encodeToJsonElement(serializer, decoded) as? JsonObject
+      reEncoded?.get(elementName)?.takeIf { it !is JsonNull }
+    } catch (_: kotlinx.serialization.SerializationException) {
+      null
+    }
+  }
+
   /**
    * The description for a property: its own [Description], or failing that the one on its declared
    * type.
@@ -330,6 +367,7 @@ internal class SchemaWalk<NODE : Any>(
       kType: KType?,
   ): ObjectMembers {
     val ownerKClass = kClassOf(kType, descriptor.serialName)
+    val encodeDefaults = kotlinxJson.configuration.encodeDefaults
     val properties = mutableListOf<Pair<String, NODE>>()
     val required = mutableListOf<String>()
 
@@ -346,12 +384,23 @@ internal class SchemaWalk<NODE : Any>(
       val describedSchema =
           descriptionOf(property, elementSchema)?.let { withDescription(elementSchema, it) }
               ?: elementSchema
+      val deprecatedSchema =
+          if (isDeprecated(property)) withDeprecatedMarker(describedSchema) else describedSchema
 
-      properties.add(
-          elementName to
-              if (isDeprecated(property)) withDeprecatedMarker(describedSchema) else describedSchema
-      )
-      if (!descriptor.isElementOptional(i)) {
+      // A property with a Kotlin default is only really optional on the wire when the encoder
+      // actually emits defaulted values (encodeDefaults = true) — otherwise a value equal to the
+      // default is omitted from output and consumers can't rely on its presence either way, so it
+      // stays required. See defaultValueOf for how the default's value is recovered.
+      val hasDefault = descriptor.isElementOptional(i)
+      val finalSchema =
+          if (hasDefault && encodeDefaults) {
+            defaultValueOf(ownerKClass, jsonObj, elementName)?.let {
+              withDefaultValue(deprecatedSchema, it)
+            } ?: deprecatedSchema
+          } else deprecatedSchema
+
+      properties.add(elementName to finalSchema)
+      if (!hasDefault || !encodeDefaults) {
         required.add(elementName)
       }
     }
