@@ -1,0 +1,378 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "info": {
+    "title": "Test API",
+    "version": "1.0.0",
+    "description": ""
+  },
+  "tags": [],
+  "paths": {
+    "/deliveries": {
+      "get": {
+        "summary": "List deliveries",
+        "tags": [
+          ""
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryChannel"
+            },
+            "in": "query",
+            "name": "channel",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "id-1",
+                  "channel": "SMS"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "operationId": "getDeliveries",
+        "deprecated": false
+      }
+    },
+    "/events": {
+      "get": {
+        "summary": "Get events",
+        "tags": [
+          ""
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "event": {
+                    "type": "created",
+                    "name": "test"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/EventResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "operationId": "getEvents",
+        "deprecated": false
+      }
+    },
+    "/filtered": {
+      "get": {
+        "summary": "Filtered list",
+        "tags": [
+          ""
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/StatusFilter"
+            },
+            "in": "query",
+            "name": "status",
+            "required": true
+          }
+        ],
+        "responses": {},
+        "security": [],
+        "operationId": "getFiltered",
+        "deprecated": false
+      }
+    },
+    "/items": {
+      "post": {
+        "summary": "Create item",
+        "tags": [
+          ""
+        ],
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "name": "test",
+                "value": 42
+              },
+              "schema": {
+                "$ref": "#/components/schemas/CreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "id-1",
+                  "created": true
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/CreateResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "operationId": "postItems",
+        "deprecated": false
+      }
+    },
+    "/nullable": {
+      "get": {
+        "summary": "Nullable fields",
+        "tags": [
+          ""
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "example": {
+                  "required": "hello",
+                  "optionalEvent": {
+                    "type": "created",
+                    "name": "x"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/NullableFieldDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "operationId": "getNullable",
+        "deprecated": false
+      }
+    },
+    "/raw": {
+      "post": {
+        "summary": "Raw JSON body",
+        "tags": [
+          ""
+        ],
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "name": "test"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/object1983999171"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {},
+        "security": [],
+        "operationId": "postRaw",
+        "deprecated": false
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "id-1"
+          },
+          "created": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "id",
+          "created"
+        ]
+      },
+      "CreateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "test"
+          },
+          "value": {
+            "type": "integer",
+            "format": "int32",
+            "example": 42
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ]
+      },
+      "Created": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "created"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "name"
+        ]
+      },
+      "Deleted": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "deleted"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "EventPayload": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Created"
+          },
+          {
+            "$ref": "#/components/schemas/Deleted"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "created": "#/components/schemas/Created",
+            "deleted": "#/components/schemas/Deleted"
+          }
+        }
+      },
+      "EventResponse": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EventPayload"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "NullableFieldDto": {
+        "type": "object",
+        "properties": {
+          "required": {
+            "type": "string",
+            "example": "hello"
+          },
+          "optional": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "optionalEvent": {
+            "$ref": "#/components/schemas/EventPayload"
+          }
+        },
+        "required": [
+          "required",
+          "optional",
+          "optionalEvent"
+        ]
+      },
+      "StatusFilter": {
+        "type": "string",
+        "enum": [
+          "ACTIVE",
+          "INACTIVE",
+          "ALL"
+        ]
+      },
+      "DeliveryChannel": {
+        "description": "This is an open set: values may be added without a new API version. Clients must accept values not listed here, for example by mapping them to a fallback.",
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "EMAIL",
+              "SMS"
+            ]
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "DeliveryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "id-1"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/DeliveryChannel",
+            "description": "How the notice is delivered.\n\nThis is an open set: values may be added without a new API version. Clients must accept values not listed here, for example by mapping them to a fallback."
+          }
+        },
+        "required": [
+          "id",
+          "channel"
+        ]
+      },
+      "object1983999171": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "test"
+          }
+        }
+      }
+    },
+    "securitySchemes": {}
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": ""
+    }
+  ]
+}
