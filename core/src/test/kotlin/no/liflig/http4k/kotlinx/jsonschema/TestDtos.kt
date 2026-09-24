@@ -10,6 +10,7 @@ import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import no.liflig.http4k.kotlinx.serializers.OpenEnumSerializer
 
 @Serializable
 data class SimplePrimitivesDto(
@@ -923,5 +924,62 @@ data class NestedDescribedEnumDto(val nested: NestedEnum, val alsoNested: Nested
 
   companion object {
     val example = NestedDescribedEnumDto(NestedEnum.FIRST, NestedEnum.SECOND)
+  }
+}
+
+// --- Open enums: OpenEnumSerializer ---
+
+@Description("How the customer is identified.")
+@Serializable(with = DescribedOpenEnum.Serializer::class)
+enum class DescribedOpenEnum {
+  Email,
+  @SerialName("phone") PhoneNumber,
+  Unsupported;
+
+  object Serializer : KSerializer<DescribedOpenEnum> by OpenEnumSerializer(fallback = Unsupported)
+}
+
+@Serializable(with = PlainOpenEnum.Serializer::class)
+enum class PlainOpenEnum {
+  ACTIVE,
+  CANCELLED,
+  UNKNOWN;
+
+  object Serializer : KSerializer<PlainOpenEnum> by OpenEnumSerializer(fallback = UNKNOWN)
+}
+
+@Serializable
+data class OpenEnumContainerDto(
+    val plain: PlainOpenEnum,
+    val nullable: PlainOpenEnum?,
+    val many: List<PlainOpenEnum>,
+    @Description("The channel the customer prefers.") val described: DescribedOpenEnum,
+    @Description("Every channel the customer accepts.") val describedMany: List<DescribedOpenEnum>,
+    @Description("Channels by priority.") val describedByKey: Map<String, DescribedOpenEnum>,
+    @Description("A closed enum, for contrast.") val closed: DescribedEnum,
+    val nested: Nested,
+) {
+  /** Resolvable only through the KType, like [NestedDescribedEnumDto.NestedEnum]. */
+  @Description("Described on an open enum nested inside its owner.")
+  @Serializable(with = Nested.Serializer::class)
+  enum class Nested {
+    INNER,
+    OTHER;
+
+    object Serializer : KSerializer<Nested> by OpenEnumSerializer(fallback = OTHER)
+  }
+
+  companion object {
+    val example =
+        OpenEnumContainerDto(
+            plain = PlainOpenEnum.ACTIVE,
+            nullable = null,
+            many = listOf(PlainOpenEnum.CANCELLED),
+            described = DescribedOpenEnum.Email,
+            describedMany = listOf(DescribedOpenEnum.PhoneNumber),
+            describedByKey = mapOf("first" to DescribedOpenEnum.Email),
+            closed = DescribedEnum.FIRST,
+            nested = Nested.INNER,
+        )
   }
 }

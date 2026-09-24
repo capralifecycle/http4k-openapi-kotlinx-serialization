@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>no.liflig</groupId>
+    <artifactId>http4k-openapi-kotlinx-serialization-parent</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>http4k-openapi-kotlinx-serialization-serializers</artifactId>
+
+  <!--
+    General-purpose kotlinx.serialization serializers for DTO libraries, such as
+    OpenEnumSerializer. core recognises the ones that need their own schema shape.
+
+    kotlinx-serialization-json is the only dependency this module may have. DTO libraries use
+    it at runtime, and they have no business depending on http4k, kotlin-reflect or anything
+    else from core - put code that needs those in core instead.
+  -->
+
+  <dependencies>
+    <dependency>
+      <groupId>org.jetbrains.kotlinx</groupId>
+      <artifactId>kotlinx-serialization-json</artifactId>
+      <version>${kotlinx-serialization.version}</version>
+    </dependency>
+
+    <!-- Test dependencies -->
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-test-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.kotest</groupId>
+      <artifactId>kotest-assertions-core-jvm</artifactId>
+      <version>${kotest.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+</project>

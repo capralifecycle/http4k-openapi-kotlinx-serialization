@@ -18,12 +18,53 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.serializer
+import no.liflig.http4k.kotlinx.serializers.OpenEnumSerializer
+import no.liflig.http4k.kotlinx.serializers.openEnumFallback
 import org.http4k.format.Json
 import org.http4k.format.JsonType
 
 /**
  * One traversal of a [SerialDescriptor] tree, producing JSON Schema nodes and registering every
  * named definition it meets in a [DefinitionRegistry]. Created per `toSchema` call.
+ *
+ * ## Rendering rules
+ *
+ * Every shape the walk emits, as "when we see this → render this". `$ref` means the schema is
+ * registered as a named definition once and referenced from each use.
+ *
+ * **Types** — decided in [schemaFor] by the descriptor's kind:
+ *
+ * |When the descriptor is…          |Render as                                                                                                                   |Handler            |
+ * |---------------------------------|----------------------------------------------------------------------------------------------------------------------------|-------------------|
+ * |a primitive                      |`{type, format?}`; `format` from the kind, else `formatMappings` by short name                                              |[primitiveToSchema]|
+ * |contextual                       |whatever the serializers module registers for it                                                                            |[schemaFor]        |
+ * |an inline value class            |its single inner value's schema, inlined — no definition of its own                                                         |[schemaFor]        |
+ * |a class                          |`$ref` → `{type: object, properties, required?}`                                                                            |[classToSchema]    |
+ * |an `object`                      |`{type: object}`, inlined                                                                                                   |[schemaFor]        |
+ * |a list or set                    |`{type: array, items}`                                                                                                      |[listToSchema]     |
+ * |a map with string keys           |`{type: object, additionalProperties}`; any other key type → error                                                          |[mapToSchema]      |
+ * |a sealed hierarchy               |`$ref` → `{oneOf, discriminator}`, one `$ref` per leaf; discriminator from `@JsonClassDiscriminator`, else the `Json` config|[sealedToSchema]   |
+ * |open polymorphism                |error: the subclass set is only known at runtime                                                                            |[schemaFor]        |
+ * |an enum                          |`$ref` → `{type: string, enum}`                                                                                             |[enumToSchema]     |
+ * |an enum with [OpenEnumSerializer]|`$ref` → `{anyOf: [{type: string, enum: <known, minus fallback>}, {type: string}]}`, described with [OPEN_ENUM_NOTICE]      |[openEnumToSchema] |
+ * |nullable (any of the above)      |per [NullableStrategy]; see [wrapNullable]                                                                                  |[wrapNullable]     |
+ *
+ * **Properties** — decided in [buildObjectProperties], applied to the property's finished schema so
+ * they land on the outer object whatever shape it has:
+ *
+ * |When the property…                                                                   |Render as                                                                                                                                     |
+ * |-------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+ * |has `@Description`                                                                   |`description`                                                                                                                                 |
+ * |has none, and its type has `@Description` and renders inline                         |the type's `description`; a type rendered as `$ref` keeps it on its definition instead ([descriptionOf], [withClassDescription])              |
+ * |has `@Description` and holds an open enum (directly, or as list element or map value)|the description, a blank line, then [OPEN_ENUM_NOTICE] — a sibling `description` hides the definition's in most viewers ([withOpenEnumNotice])|
+ * |has `@Deprecated`                                                                    |`deprecated: true`                                                                                                                            |
+ * |has a Kotlin default, and `encodeDefaults = true`                                    |left out of `required`, with the default as `default` when recoverable ([defaultValueOf])                                                     |
+ * |anything else                                                                        |listed in `required`                                                                                                                          |
+ *
+ * Rules applied outside the walk: an enum root keeps its own definition name under
+ * `overrideDefinitionId` (see `KotlinxSerializationJsonSchemaCreator`), and nulls are stripped from
+ * the rendered document everywhere except body examples (see
+ * [no.liflig.http4k.kotlinx.openapi.KotlinxOpenApi3Renderer]).
  */
 @OptIn(ExperimentalSerializationApi::class)
 internal class SchemaWalk<NODE : Any>(
@@ -47,10 +88,15 @@ internal class SchemaWalk<NODE : Any>(
     val serialName = descriptor.serialName.removeSuffix("?")
 
     val baseSchema =
+        // One branch per row of the "Types" table in the class KDoc.
         when (descriptor.kind) {
           is PrimitiveKind ->
               primitiveToSchema(descriptor.kind as PrimitiveKind, serialName, jsonElement)
-          SerialKind.ENUM -> enumToSchema(descriptor, serialName, kType)
+          SerialKind.ENUM ->
+              descriptor.openEnumFallback()?.let { fallback ->
+                openEnumToSchema(descriptor, serialName, kType, fallback)
+              } ?: enumToSchema(descriptor, serialName, kType)
+          // Rendered as whatever the serializers module registers for the type.
           SerialKind.CONTEXTUAL -> {
             val contextualDescriptor =
                 kotlinxJson.serializersModule.getContextualDescriptor(descriptor)
@@ -59,6 +105,7 @@ internal class SchemaWalk<NODE : Any>(
                     )
             schemaFor(contextualDescriptor, jsonElement, kType)
           }
+          // An inline value class has no definition of its own: its inner value is inlined.
           StructureKind.CLASS ->
               if (descriptor.isInline) {
                 schemaFor(
@@ -73,6 +120,7 @@ internal class SchemaWalk<NODE : Any>(
           StructureKind.LIST -> listToSchema(descriptor, jsonElement, kType)
           StructureKind.MAP -> mapToSchema(descriptor, jsonElement, kType)
           is PolymorphicKind.SEALED -> sealedToSchema(descriptor, serialName, kType)
+          // The subclass set of open polymorphism is only known at runtime.
           is PolymorphicKind.OPEN ->
               throw IllegalArgumentException(
                   "PolymorphicKind.OPEN is not supported for JSON Schema generation"
@@ -121,6 +169,47 @@ internal class SchemaWalk<NODE : Any>(
               "enum" to json.array(elementNames.map { json.string(it) }),
           ),
           kClassOf(kType, serialName),
+      )
+    }
+  }
+
+  /**
+   * An enum whose serializer decodes unknown values to a fallback, rendered as a JSON Schema "open
+   * enum": the known values are listed, and any other string is valid too.
+   *
+   * [fallback] is left out of the known values. It is the placeholder a reader substitutes for a
+   * value it does not know, not a value with meaning of its own, and the plain-string branch still
+   * accepts it should a producer write it.
+   *
+   * The definition's description is the enum's own [Description] followed by [OPEN_ENUM_NOTICE],
+   * since the schema alone does not tell a client author that they must handle unlisted values.
+   */
+  private fun openEnumToSchema(
+      descriptor: SerialDescriptor,
+      serialName: String,
+      kType: KType?,
+      fallback: String,
+  ): NODE {
+    return registry.define(serialName, serialName.substringAfterLast('.')) {
+      val knownValues =
+          (0 until descriptor.elementsCount)
+              .map { descriptor.getElementName(it) }
+              .filter { it != fallback }
+      val description =
+          listOfNotNull(descriptionOn(kClassOf(kType, serialName)), OPEN_ENUM_NOTICE)
+              .joinToString("\n\n")
+      json.obj(
+          "description" to json.string(description),
+          "anyOf" to
+              json.array(
+                  listOf(
+                      json.obj(
+                          "type" to json.string("string"),
+                          "enum" to json.array(knownValues.map { json.string(it) }),
+                      ),
+                      json.obj("type" to json.string("string")),
+                  )
+              ),
       )
     }
   }
@@ -280,6 +369,31 @@ internal class SchemaWalk<NODE : Any>(
   }
 
   /**
+   * [description] followed by [OPEN_ENUM_NOTICE] when [descriptor] holds an open enum, else
+   * [description] unchanged.
+   *
+   * A property holding an open enum is a `$ref` to a definition that already carries the notice.
+   * Only a property with a description of its own gets here, and most viewers show that sibling
+   * `description` *instead of* the definition's, which would hide the notice exactly where an
+   * author wrote something about the field. Repeating it keeps it visible without duplicating it on
+   * fields that have no description.
+   */
+  private fun withOpenEnumNotice(description: String, descriptor: SerialDescriptor): String =
+      if (holdsOpenEnum(descriptor)) "$description\n\n$OPEN_ENUM_NOTICE" else description
+
+  /**
+   * True when [descriptor] is an open enum, or a list or map whose elements or values are, at any
+   * depth. Nullable wrappers need no unwrapping: they pass the marker through.
+   */
+  private fun holdsOpenEnum(descriptor: SerialDescriptor): Boolean =
+      when (descriptor.kind) {
+        SerialKind.ENUM -> descriptor.openEnumFallback() != null
+        StructureKind.LIST -> holdsOpenEnum(descriptor.getElementDescriptor(0))
+        StructureKind.MAP -> holdsOpenEnum(descriptor.getElementDescriptor(1))
+        else -> false
+      }
+
+  /**
    * True when [schema] points at a definition rather than describing the type in place.
    *
    * Checks inside `anyOf` branches as well as the top level, since a nullable reference renders as
@@ -382,8 +496,9 @@ internal class SchemaWalk<NODE : Any>(
               property?.returnType,
           )
       val describedSchema =
-          descriptionOf(property, elementSchema)?.let { withDescription(elementSchema, it) }
-              ?: elementSchema
+          descriptionOf(property, elementSchema)
+              ?.let { withOpenEnumNotice(it, descriptor.getElementDescriptor(i)) }
+              ?.let { withDescription(elementSchema, it) } ?: elementSchema
       val deprecatedSchema =
           if (isDeprecated(property)) withDeprecatedMarker(describedSchema) else describedSchema
 
@@ -523,3 +638,11 @@ internal class SchemaWalk<NODE : Any>(
   private fun serialNameOf(kClass: KClass<*>): String =
       kotlinxJson.serializersModule.serializer(kClass.java).descriptor.serialName
 }
+
+/**
+ * Tells client authors that an open enum's list of values is not exhaustive. Rendered on the enum's
+ * definition, and appended to the description of a field that holds one.
+ */
+internal const val OPEN_ENUM_NOTICE =
+    "This is an open set: values may be added without a new API version. Clients must accept " +
+        "values not listed here, for example by mapping them to a fallback."

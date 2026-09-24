@@ -14,19 +14,30 @@ kotlinx.serialization `SerialDescriptor` trees instead of Jackson reflection.
 
 ## Source layout
 
-Two published modules. `annotations` holds `@Description` alone and **must stay
+Four published modules. `annotations` holds `@Description` alone and **must stay
 dependency-free** — that is the whole point of it, so a library of pure domain types can
-annotate its value classes without taking http4k onto its compile path. `core` keeps the
-`http4k-openapi-kotlinx-serialization` coordinates and depends on `annotations` at compile
-scope, so consumers of the main artifact see no difference. Both share the package
-`no.liflig.http4k.kotlinx.jsonschema`, which keeps every existing import working; the repo
-has no `module-info.java`, so the split package is a classpath detail only.
+annotate its value classes without taking http4k onto its compile path. `serializers` holds
+general-purpose kotlinx serializers for DTO libraries (`OpenEnumSerializer` so far) and may
+depend on `kotlinx-serialization-json` **and nothing else** — no http4k, no kotlin-reflect;
+new reusable serializers go here, not in `core`. `core` keeps the
+`http4k-openapi-kotlinx-serialization` coordinates and depends on both at compile scope, so
+consumers of the main artifact see no difference; it recognises the serializers that render
+specially through public descriptor queries (`openEnumFallback()`), never by serializer type.
+`annotations` and `core` share the package `no.liflig.http4k.kotlinx.jsonschema`, which keeps
+every existing import working; the repo has no `module-info.java`, so the split package is a
+classpath detail only. `serializers` uses `no.liflig.http4k.kotlinx.serializers`, since it is
+runtime serialization rather than schema generation. `bom` has no source — it's a
+`dependencyManagement`-only pom pinning the other three to the version they were released
+together with, for consumers who'd rather import one BOM coordinate than pin each artifact
+separately (see "BOM and release versioning" below).
 
 | File                                                                                  | What                                                              |
 | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `annotations/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/Description.kt` | `@Description`. No dependencies — keep it that way.               |
+| `serializers/src/main/kotlin/no/liflig/http4k/kotlinx/serializers/OpenEnumSerializer.kt` | Enum serializer that decodes unknown values to a fallback entry.  |
+| `serializers/src/main/kotlin/no/liflig/http4k/kotlinx/serializers/OpenEnum.kt`        | Internal descriptor marker, read through `openEnumFallback()`.    |
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinxSerializationJsonSchemaCreator.kt` | Entry point. Implements `JsonSchemaCreator<Any, NODE>`; resolves the root example, runs one walk. |
-| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/SchemaWalk.kt`                   | The descriptor traversal: one instance per `toSchema` call.       |
+| `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/SchemaWalk.kt`                   | The descriptor traversal: one instance per `toSchema` call. Its class KDoc holds the rendering-rules table — **update it with every new rendering path.** |
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/DefinitionRegistry.kt`           | Collects definitions by identity; names them once after the walk. |
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/KotlinDeclarations.kt`           | Reflection lookups the descriptor cannot answer.                  |
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/jsonschema/SealedClassExampleProvider.kt`   | `companion.example` discovery for sealed subclasses.              |
@@ -34,13 +45,14 @@ has no `module-info.java`, so the split package is a classpath detail only.
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/openapi/KotlinxOpenApi3Renderer.kt`         | `ApiRenderer`: NODE shortcut, then kotlinx; strips nulls outside examples. |
 | `core/src/main/kotlin/no/liflig/http4k/kotlinx/openapi/OpenApi3WithKotlinx.kt`             | `openApi3WithKotlinx(...)` factory, wraps the renderer in `cached()`. |
 | `core/src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/TestDtos.kt`                     | Test DTOs covering primitives, nullables, sealed classes, maps.   |
-| `core/src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/*Test.kt`                        | Schema tests by concern: structure, sealed, naming, annotations. Shared creators in `SchemaTestSupport.kt`. |
+| `core/src/test/kotlin/no/liflig/http4k/kotlinx/jsonschema/*Test.kt`                        | Schema tests by concern: structure, sealed, naming, annotations, open enums. Shared creators in `SchemaTestSupport.kt`. |
+| `serializers/src/test/kotlin/no/liflig/http4k/kotlinx/serializers/*Test.kt`               | Serializer behaviour (decode, encode, descriptor), with their own DTOs. |
 | `core/src/test/kotlin/no/liflig/http4k/kotlinx/openapi/*Test.kt`                           | End-to-end via `openApi3WithKotlinx`, plus `ExamplePayloadTest`. Shared DTOs in `RendererTestSupport.kt`. |
 
 ## Build & test
 
 ```bash
-mvn test            # unit + approval tests (93 tests)
+mvn test            # unit + approval tests (120 tests: 106 core, 14 serializers)
 mvn verify          # full build (spotless check + tests)
 mvn spotless:apply  # apply ktfmt formatting (run before committing)
 ```
@@ -70,7 +82,7 @@ property bump.
 
 ## Testing
 
-Unit tests only (93 tests, JUnit 5 + Kotest assertions, `swagger-parser` for OpenAPI
+Unit tests only (120 tests, JUnit 5 + Kotest assertions, `swagger-parser` for OpenAPI
 validation). Write tests as part of development; test code is source code; ROI matters
 — not everything is worth testing.
 
@@ -87,7 +99,31 @@ Implication: every commit to master becomes a published release. Prefer PRs / fe
 branches for non-trivial changes so downstream consumers aren't bumping versions for
 typo fixes.
 
-## General principles
+### BOM and release versioning
+
+`core`, `annotations`, `serializers` and `bom` all inherit `<version>${revision}</version>` from this
+parent pom, and the release step passes a single `-Drevision="$TAG"` to one `mvn deploy`
+covering the whole reactor. That's the entire sync mechanism: there's no version to keep
+up to date by hand, because all four modules are stamped with the same property in the
+same build. `flatten-maven-plugin` (`resolveCiFriendliesOnly`) then bakes that resolved
+version into every published pom before upload — including the `${revision}` references
+inside `bom/pom.xml`'s `dependencyManagement` and inside `core/pom.xml`'s dependencies on
+`annotations` and `serializers` — so what consumers resolve is always concrete, matching
+version numbers, never a placeholder.
+
+This is also why a downstream consumer importing the BOM can never see `core`,
+`annotations` and `serializers` diverge *within one BOM version* — they were only ever built and deployed
+together. Drift is only possible *across* BOM versions, if a consumer imports one version
+of the BOM in one place and a newer one arrives transitively through another dependency;
+`mvn enforcer:enforce -Drules=dependencyConvergence` (if the consumer has that rule, as
+`cn-cx-customs-se` does) will still catch that case, same as it would for any other
+version conflict.
+
+**When adding another published module**, add its `dependencyManagement` entry to
+`bom/pom.xml` in the same PR — the BOM is a manually maintained list, not derived from
+`<modules>`, so a new artifact only gets covered once someone adds it there.
+
+
 
 - Follow existing conventions; ask before introducing new ones.
 - Check the latest stable version with the Maven versions plugin (see above) before

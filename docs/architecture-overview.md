@@ -32,23 +32,31 @@ runtime (`Json`, `SerialDescriptor`, `KSerializer`).
 
 ## Module / package layout
 
-Two Maven modules, `annotations` and `core`, published as two artifacts (AGENTS.md's
-Source layout table is the canonical module map). Two packages:
+Three Maven modules with source — `annotations`, `serializers` and `core` — published as
+three artifacts, plus a source-less `bom` (AGENTS.md's Source layout table is the canonical
+module map). `serializers` holds general-purpose kotlinx serializers that DTO libraries
+depend on at runtime, so its only dependency is `kotlinx-serialization-json`; `core` reads
+the ones that render specially through public descriptor queries. Three packages:
 
 | Package                                       | Responsibility                                                                 |
 | --------------------------------------------- | ------------------------------------------------------------------------------ |
 | `no.liflig.http4k.kotlinx.jsonschema`         | Schema generation from `SerialDescriptor` trees. Sealed-class example wiring.  |
 | `no.liflig.http4k.kotlinx.openapi`            | http4k `ApiRenderer` adapter + `openApi3WithKotlinx` factory.                  |
+| `no.liflig.http4k.kotlinx.serializers`        | Runtime serializers for DTO libraries (`OpenEnumSerializer`).                  |
 
 Source files:
 
 - `Description.kt` (module `annotations`) — the `@Description` annotation. Zero dependencies
-  by design; every file below lives in module `core`.
+  by design.
+- `OpenEnumSerializer.kt`, `OpenEnum.kt` (module `serializers`) — the fallback-decoding
+  enum serializer and the internal marker it puts on its descriptor, read through
+  `openEnumFallback()`. Every file below lives in module `core`.
 - `KotlinxSerializationJsonSchemaCreator.kt` — the public entry point (implements http4k's
   `JsonSchemaCreator<Any, NODE>`). Resolves the root example's serializer, JSON and
   `KType`, then runs one `SchemaWalk` over a fresh `DefinitionRegistry`.
 - `SchemaWalk.kt` — the descriptor traversal. One instance per `toSchema` call; every
   handler takes `(descriptor, jsonElement, kType)` and the per-call state lives in fields.
+  Its class KDoc holds the rendering-rules table (mirrored in "Rendering rules" below).
 - `DefinitionRegistry.kt` — collects definitions by identity during the walk and names
   them once at the end (see Name resolution).
 - `KotlinDeclarations.kt` — the reflection lookups a descriptor cannot answer:
@@ -83,7 +91,7 @@ Source files:
         stores the definition unless it already exists or is being built further up the
         stack (recursion).
       - Lists / Maps / Enums / Sealed classes → kind-specific node shape (`oneOf` +
-        `discriminator` for sealed).
+        `discriminator` for sealed, `anyOf` for open enums).
       - Nullables → applied by `NullableStrategy`.
       - Properties annotated `@Deprecated` → `"deprecated": true` appended to the
         finished property schema (after `NullableStrategy`, so it lands on the outer
@@ -109,6 +117,92 @@ Source files:
    exemption is decided by position in the document, not by key name, so a
    `@Serializable` property called `example` under `components/schemas` is stripped like
    any other structure.
+
+## Rendering rules
+
+Every shape the walk emits, as "when we see this → render this". The same tables head
+`SchemaWalk`'s class KDoc, next to the code; change both together. `$ref` means the schema
+is registered as a named definition once and referenced from each use.
+
+**Types** — decided in `schemaFor` by the descriptor's kind:
+
+| When the descriptor is…              | Render as                                                                                                   |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| a primitive                          | `{type, format?}`; `format` from the kind, else `formatMappings` by short name                             |
+| contextual                           | whatever the serializers module registers for it                                                           |
+| an inline value class                | its single inner value's schema, inlined — no definition of its own                                        |
+| a class                              | `$ref` → `{type: object, properties, required?}`                                                            |
+| an `object`                          | `{type: object}`, inlined                                                                                   |
+| a list or set                        | `{type: array, items}`                                                                                      |
+| a map with string keys               | `{type: object, additionalProperties}`; any other key type → error                                         |
+| a sealed hierarchy                   | `$ref` → `{oneOf, discriminator}`, one `$ref` per leaf; see "Sealed class handling"                         |
+| open polymorphism                    | error: the subclass set is only known at runtime                                                           |
+| an enum                              | `$ref` → `{type: string, enum}`                                                                             |
+| an enum with `OpenEnumSerializer`    | `$ref` → `{anyOf: [{type: string, enum: <known, minus fallback>}, {type: string}]}`; see "Open enums"       |
+| nullable (any of the above)          | per `NullableStrategy`; see "Nullable strategy"                                                             |
+
+**Properties** — decided in `buildObjectProperties`, applied to the property's finished
+schema (after `NullableStrategy`) so they land on the outer object whatever shape it has:
+
+| When the property…                                                  | Render as                                                                                    |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| has `@Description`                                                  | `description`                                                                                |
+| has none, and its type has `@Description` and renders inline        | the type's `description`; a `$ref` type keeps it on its definition instead                  |
+| has `@Description` and holds an open enum (directly, or as list element or map value) | the description, a blank line, then the open-enum notice                   |
+| has `@Deprecated`                                                   | `deprecated: true`                                                                           |
+| has a Kotlin default, and `encodeDefaults = true`                   | left out of `required`, with the default as `default` when recoverable                      |
+| anything else                                                       | listed in `required`                                                                         |
+
+Outside the walk: an enum root keeps its own definition name under `overrideDefinitionId`
+(step 3.4 above), and `KotlinxOpenApi3Renderer` strips nulls everywhere except body
+examples (step 4).
+
+## Open enums
+
+An enum serialized by `OpenEnumSerializer` decodes a value it does not know to a fallback
+entry instead of failing, so a producer can add entries without breaking consumers on an
+older version. The spec has to say the same thing, or client authors generate closed enums
+and break exactly as before. So it renders as a JSON Schema open enum:
+
+```json
+"IdentityType": {
+  "description": "<the enum's @Description>\n\n<open-enum notice>",
+  "anyOf": [ { "type": "string", "enum": ["Email", "phone"] }, { "type": "string" } ]
+}
+```
+
+- **Recognised by descriptor, not by serializer type.** The walk only ever holds
+  descriptors; a child element's descriptor does not link back to its serializer. Checking
+  `is OpenEnumSerializer` on a looked-up serializer would fail for the recommended usage
+  anyway: `object Serializer : KSerializer<T> by OpenEnumSerializer(...)` is its own type,
+  since delegation hides the delegate. A descriptor subclass was rejected too:
+  `SerialDescriptor` is `@SubclassOptInRequired(SealedSerializationApi::class)`, and
+  kotlinx.serialization reserves the right to break third-party implementations. What
+  remains is an annotation instance in `descriptor.annotations`: stable public API that
+  nullable wrappers delegate, and available with or without a `KType`. The annotation class
+  is `internal` with an empty `@Target`, so only the serializer can create it and it can
+  never be put on a type by hand; `core` asks through the public `openEnumFallback()`.
+- **The fallback is not a known value.** It is the placeholder a reader substitutes for
+  a value it does not know. The plain-string branch still accepts it, should a producer
+  write it.
+- **The notice goes on the definition, and on fields that describe themselves.** Most
+  viewers show a sibling `description` next to a `$ref` *instead of* the definition's,
+  so a field with its own `@Description` gets the notice appended; a field without one is
+  a bare `$ref` and shows the definition's. Lists and maps of open enums count too.
+- **Encoding the fallback is lossy.** An unknown value decoded to the fallback and encoded
+  again comes out as the fallback's name. That is the chosen trade-off — a round trip never
+  fails — and it is documented on the serializer. A field that has to keep the raw value
+  needs a type that holds it (`Known(entry)` / `Unknown(raw)`).
+- **Wrong types still fail.** On JSON the serializer reads the value as a tree first, so a
+  number, object or array is consumed cleanly and rejected with a `SerializationException`
+  rather than silently becoming the fallback — tolerance covers new values, not a broken
+  contract.
+- **`buildSerialDescriptor` is `@InternalSerializationApi`.** kotlinx.serialization has no
+  public builder for an enum descriptor; its own enum serializer uses the same call. A
+  kotlinx.serialization upgrade that changes it breaks `serializers` at compile time or in
+  its tests, not silently.
+- **http4k's `Query.enum<T>()` lens is unaffected.** It parses with `valueOf`, not the
+  serializer, so an unknown query value is still a 400; only the schema is open.
 
 ## Sealed class handling
 
@@ -193,7 +287,8 @@ a service on a warm JVM the per-request cost is a few milliseconds.
 
 - `mvn test` — unit + approval tests, split by concern: schema structure, sealed
   hierarchies, definition naming and property annotations under `jsonschema`; end-to-end
-  rendering and example payloads under `openapi`. 93 tests.
+  rendering and example payloads under `openapi`; serializer behaviour under
+  `serializers`. 120 tests.
 - `mvn verify` — full build (format check + tests).
 - `mvn spotless:apply` — apply ktfmt formatting.
 - `mvn versions:display-dependency-updates versions:display-parent-updates versions:display-property-updates`

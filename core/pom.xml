@@ -19,6 +19,11 @@
       <artifactId>http4k-openapi-kotlinx-serialization-annotations</artifactId>
       <version>${revision}</version>
     </dependency>
+    <dependency>
+      <groupId>no.liflig</groupId>
+      <artifactId>http4k-openapi-kotlinx-serialization-serializers</artifactId>
+      <version>${revision}</version>
+    </dependency>
 
     <!-- API dependencies -->
     <dependency>

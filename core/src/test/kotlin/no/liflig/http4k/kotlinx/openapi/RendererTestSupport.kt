@@ -1,6 +1,7 @@
 package no.liflig.http4k.kotlinx.openapi
 
 import io.kotest.matchers.shouldBe
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json as KotlinxJson
@@ -9,7 +10,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import no.liflig.http4k.kotlinx.jsonschema.Description
 import no.liflig.http4k.kotlinx.jsonschema.KotlinxSerializationJsonSchemaCreator
+import no.liflig.http4k.kotlinx.serializers.OpenEnumSerializer
 import org.http4k.contract.contract
 import org.http4k.contract.openapi.ApiInfo
 import org.http4k.contract.openapi.v3.ApiServer
@@ -118,6 +121,21 @@ enum class TaskStatus {
 data class TaskDto(
     val id: String,
     val status: TaskStatus,
+)
+
+@Serializable(with = DeliveryChannel.Serializer::class)
+enum class DeliveryChannel {
+  EMAIL,
+  SMS,
+  UNKNOWN;
+
+  object Serializer : KSerializer<DeliveryChannel> by OpenEnumSerializer(fallback = UNKNOWN)
+}
+
+@Serializable
+data class DeliveryDto(
+    val id: String,
+    @Description("How the notice is delivered.") val channel: DeliveryChannel,
 )
 
 /**

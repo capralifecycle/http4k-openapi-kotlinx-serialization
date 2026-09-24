@@ -88,15 +88,35 @@ Short definition names are derived from `serialName` (e.g., `com.example.UserDto
 
 ## Adding to your project
 
-Add the dependency to your `pom.xml`:
+Import the BOM in `dependencyManagement`, then add the dependency without a `<version>`:
 
 ```xml
-<dependency>
-  <groupId>no.liflig</groupId>
-  <artifactId>http4k-openapi-kotlinx-serialization</artifactId>
-  <version>${http4k-openapi-kotlinx-serialization.version}</version>
-</dependency>
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>no.liflig</groupId>
+      <artifactId>http4k-openapi-kotlinx-serialization-bom</artifactId>
+      <version>${http4k-openapi-kotlinx-serialization.version}</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
+
+<dependencies>
+  <dependency>
+    <groupId>no.liflig</groupId>
+    <artifactId>http4k-openapi-kotlinx-serialization</artifactId>
+  </dependency>
+</dependencies>
 ```
+
+The BOM pins `http4k-openapi-kotlinx-serialization` and
+`http4k-openapi-kotlinx-serialization-annotations` to the versions they were released
+together with, so if you end up depending on both (directly, or one of them transitively
+through another library) they can't drift to different releases the way two independently
+pinned `<version>` entries can. Prefer this over depending on the artifact directly with
+an explicit `<version>`.
 
 You also need http4k's OpenAPI and kotlinx.serialization dependencies. See the project's `pom.xml` for the full list.
 
@@ -104,13 +124,12 @@ You also need http4k's OpenAPI and kotlinx.serialization dependencies. See the p
 
 `@Description` is most useful on shared vocabulary types — a `TrainNumber` or a `NominalDate` described once, rather than at every field holding it. Those types usually live in a domain-types library that has no business depending on http4k.
 
-For that case, depend on the annotations artifact alone. It carries `@Description` and nothing else, and pulls in no dependencies beyond `kotlin-stdlib`:
+For that case, depend on the annotations artifact alone. It carries `@Description` and nothing else, and pulls in no dependencies beyond `kotlin-stdlib`. With the BOM imported as above, no `<version>` is needed here either:
 
 ```xml
 <dependency>
   <groupId>no.liflig</groupId>
   <artifactId>http4k-openapi-kotlinx-serialization-annotations</artifactId>
-  <version>${http4k-openapi-kotlinx-serialization.version}</version>
 </dependency>
 ```
 
@@ -400,6 +419,73 @@ val cleanedTrains: List<RuteplanTrainDto>,
 The cross-link is real maintainer value that an annotation cannot express — KDoc resolves `[trains]`, an annotation argument is plain text. That asymmetry is also why the two can never be quite the same string, and so why keeping both in sync by hand is a losing game: prefer a short KDoc that points, over one that repeats.
 
 Deciding by audience rather than by "avoid duplication" answers the awkward case too. When a fact serves both readers, it belongs in `@Description` and KDoc stays quiet.
+
+### Open enums
+
+Adding an entry to an enum is a breaking change for everyone who *reads* it: a consumer on the previous version fails to decode the whole message, even when it never looks at that field. `OpenEnumSerializer` makes the enum tolerant — an unknown value decodes to a fallback entry — and the schema generator then renders it as an open enum, so that client authors know to be tolerant too.
+
+It lives in the `serializers` artifact, which depends on `kotlinx-serialization-json` only, so a DTO library can use it without taking http4k onto its compile path (with the BOM imported, no `<version>` is needed):
+
+```xml
+<dependency>
+  <groupId>no.liflig</groupId>
+  <artifactId>http4k-openapi-kotlinx-serialization-serializers</artifactId>
+</dependency>
+```
+
+Give the enum a fallback entry and point it at the serializer. A nested `object` keeps the companion free for other uses, such as `example`:
+
+```kotlin
+@Description("How the customer is identified.")
+@Serializable(with = IdentityType.Serializer::class)
+enum class IdentityType {
+  Email,
+  @SerialName("phone") PhoneNumber,
+  Unsupported;
+
+  object Serializer : KSerializer<IdentityType> by OpenEnumSerializer(fallback = Unsupported)
+}
+
+@Serializable
+data class CustomerDto(
+    val identity: IdentityType,
+    @Description("The channel the customer prefers.") val preferred: IdentityType,
+)
+```
+
+Names work as for a plugin-generated enum serializer: `@SerialName` on an entry or on the enum class. The rendered schema lists the known values, leaves the fallback out, and accepts any other string:
+
+```json
+"IdentityType": {
+  "description": "How the customer is identified.\n\nThis is an open set: values may be added without a new API version. Clients must accept values not listed here, for example by mapping them to a fallback.",
+  "anyOf": [
+    { "type": "string", "enum": ["Email", "phone"] },
+    { "type": "string" }
+  ]
+},
+"CustomerDto": {
+  "type": "object",
+  "properties": {
+    "identity": { "$ref": "#/components/schemas/IdentityType" },
+    "preferred": {
+      "$ref": "#/components/schemas/IdentityType",
+      "description": "The channel the customer prefers.\n\nThis is an open set: …"
+    }
+  },
+  "required": ["identity", "preferred"]
+}
+```
+
+The notice sits on the definition. A field with a `@Description` of its own gets it appended as well, because most viewers show a field's description *instead of* its type's — the same applies to a list or map of open enums. A field without one stays a bare `$ref`.
+
+How it decodes and encodes:
+
+- A known value decodes to its entry; `Json { decodeEnumsCaseInsensitive = true }` is honoured.
+- Any other string decodes to the fallback.
+- A value that is not a string — a number, object or array — still fails with `SerializationException`. The tolerance is for new values, not for a payload that breaks the contract.
+- **Encoding is lossy for unknown values.** A value decoded to the fallback encodes as the fallback's name, not as what was received. If a field has to keep the original — say you store the DTO and re-emit it — model it as a type that holds the raw string instead.
+
+Keep enums that clients *send* to you closed. There, rejecting an unknown value is the point, and adding one breaks no client.
 
 ### Inline value classes
 

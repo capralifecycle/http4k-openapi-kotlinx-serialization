@@ -17,10 +17,16 @@
 
   <!-- annotations carries @Description alone, with no dependencies, so a pure domain-types
        library can be annotated without taking http4k onto its compile path. core depends on
-       it at compile scope, so consumers of the main artifact see no difference. -->
+       it at compile scope, so consumers of the main artifact see no difference. serializers
+       holds general-purpose kotlinx serializers for DTO libraries (kotlinx-serialization only,
+       no http4k); core depends on it to recognise the ones that render specially. bom manages
+       all three at the version they were released with, for consumers that want one
+       coordinate to import rather than pinning each artifact separately. -->
   <modules>
     <module>annotations</module>
+    <module>serializers</module>
     <module>core</module>
+    <module>bom</module>
   </modules>
 
   <properties>

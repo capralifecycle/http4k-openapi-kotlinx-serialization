@@ -7,6 +7,8 @@ import io.kotest.matchers.maps.shouldNotBeEmpty
 import io.kotest.matchers.maps.shouldNotContainKey
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldStartWith
 import kotlinx.serialization.json.Json as KotlinxJson
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
@@ -194,6 +196,53 @@ class KotlinxOpenApi3RendererTest {
     schemas shouldNotContainKey "status"
     schemas.keys.filter { it.contains("TaskStatus", ignoreCase = true) } shouldBe
         listOf("TaskStatus")
+  }
+
+  @Test
+  fun `renders an open enum as query parameter and body field, validating as openapi 3_1`() {
+    val channelLens = Query.enum<DeliveryChannel>().required("channel")
+    val bodyLens = Body.auto<DeliveryDto>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/deliveries" meta
+              {
+                summary = "List deliveries"
+                queries += channelLens
+                returning(OK, bodyLens to DeliveryDto("id-1", DeliveryChannel.SMS))
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val response = app(Request(GET, "/"))
+    val spec = KotlinxJson.parseToJsonElement(response.bodyString()).jsonObject
+    val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
+
+    // One component, keyed by the enum type, for both the parameter and the body field.
+    schemas shouldContainKey "DeliveryChannel"
+    schemas shouldNotContainKey "channel"
+    val channel = schemas["DeliveryChannel"]?.jsonObject.shouldNotBeNull()
+    val (known, anyString) = channel["anyOf"]?.jsonArray.shouldNotBeNull().map { it.jsonObject }
+    known["enum"]?.jsonArray?.map { it.jsonPrimitive.content } shouldBe listOf("EMAIL", "SMS")
+    anyString["type"]?.jsonPrimitive?.content shouldBe "string"
+    channel["description"]?.jsonPrimitive?.content.shouldNotBeNull() shouldContain "open set"
+
+    val field =
+        schemas["DeliveryDto"]
+            ?.jsonObject
+            ?.get("properties")
+            ?.jsonObject
+            ?.get("channel")
+            ?.jsonObject
+    field?.get("description")?.jsonPrimitive?.content.shouldNotBeNull() shouldStartWith
+        "How the notice is delivered.\n\n"
+
+    val parseResult =
+        io.swagger.parser.OpenAPIParser().readContents(response.bodyString(), null, null)
+    parseResult.messages.orEmpty().shouldBeEmpty()
   }
 
   @Test
