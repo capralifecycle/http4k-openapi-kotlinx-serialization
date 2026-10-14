@@ -925,3 +925,175 @@ data class NestedDescribedEnumDto(val nested: NestedEnum, val alsoNested: Nested
     val example = NestedDescribedEnumDto(NestedEnum.FIRST, NestedEnum.SECOND)
   }
 }
+
+// --- @AllowedValues ---
+
+object SushiPieces : AllowedValuesProvider<Int> {
+  override val values = setOf(6, 8, 12)
+}
+
+object DumplingPieces : AllowedValuesProvider<Int> {
+  override val values = setOf(5, 10, 15)
+}
+
+object PortionWeights : AllowedValuesProvider<Kg> {
+  override val values = setOf(Kg(1500), Kg(3000))
+}
+
+object ServingCounts : AllowedValuesProvider<Long> {
+  override val values = setOf(1L, 2L)
+}
+
+object Sizes : AllowedValuesProvider<String> {
+  override val values = setOf("S", "M", "L")
+}
+
+object Ratios : AllowedValuesProvider<Double> {
+  override val values = setOf(0.5, 1.0)
+}
+
+object Grades : AllowedValuesProvider<Char> {
+  override val values = setOf('A', 'B')
+}
+
+object Confirmed : AllowedValuesProvider<Boolean> {
+  override val values = setOf(true)
+}
+
+/** Above `Int.MAX_VALUE`, so it only renders correctly if written the way `UInt` serializes. */
+object LargeQuotas : AllowedValuesProvider<UInt> {
+  override val values = setOf(10u, 4_000_000_000u)
+}
+
+/** One property per supported kind, plus the nullable, `@SerialName` and getter-target forms. */
+@Serializable
+data class AllowedValuesDto(
+    @AllowedValues(SushiPieces::class) val pieces: Int,
+    @AllowedValues(DumplingPieces::class) val nullablePieces: Int?,
+    @AllowedValues(PortionWeights::class) val weight: Kg,
+    @AllowedValues(ServingCounts::class) @SerialName("serving_count") val servings: Long,
+    @AllowedValues(Sizes::class) val size: String,
+    @AllowedValues(Ratios::class) val ratio: Double,
+    @AllowedValues(Grades::class) val grade: Char,
+    @AllowedValues(Confirmed::class) val confirmed: Boolean,
+    @AllowedValues(LargeQuotas::class) val quota: UInt,
+    @get:AllowedValues(Sizes::class) val viaGetter: String,
+    val unconstrained: Int,
+) {
+  companion object {
+    val example =
+        AllowedValuesDto(8, null, Kg(1500), 2, "M", 0.5, 'A', true, 4_000_000_000u, "S", 7)
+  }
+}
+
+@Serializable
+data class AllowedValuesTypeMismatchDto(@AllowedValues(SushiPieces::class) val size: String) {
+  companion object {
+    val example = AllowedValuesTypeMismatchDto("M")
+  }
+}
+
+@Serializable
+data class AllowedValuesOnEnumDto(@AllowedValues(Sizes::class) val choice: TestEnum) {
+  companion object {
+    val example = AllowedValuesOnEnumDto(TestEnum.VALUE_A)
+  }
+}
+
+@Serializable
+data class AllowedValuesOnListDto(@AllowedValues(SushiPieces::class) val pieces: List<Int>) {
+  companion object {
+    val example = AllowedValuesOnListDto(listOf(6))
+  }
+}
+
+class NotAnObjectSizes : AllowedValuesProvider<String> {
+  override val values = setOf("S")
+}
+
+@Serializable
+data class AllowedValuesNotAnObjectDto(@AllowedValues(NotAnObjectSizes::class) val size: String) {
+  companion object {
+    val example = AllowedValuesNotAnObjectDto("S")
+  }
+}
+
+object NoSizes : AllowedValuesProvider<String> {
+  override val values = emptySet<String>()
+}
+
+@Serializable
+data class AllowedValuesEmptyDto(@AllowedValues(NoSizes::class) val size: String) {
+  companion object {
+    val example = AllowedValuesEmptyDto("S")
+  }
+}
+
+/** The example uses a value its own constraint rejects. */
+@Serializable
+data class AllowedValuesDisallowedExampleDto(@AllowedValues(SushiPieces::class) val pieces: Int) {
+  companion object {
+    val example = AllowedValuesDisallowedExampleDto(5)
+  }
+}
+
+object IntAsStringSerializer : KSerializer<Int> {
+  override val descriptor: SerialDescriptor =
+      PrimitiveSerialDescriptor("IntAsString", PrimitiveKind.STRING)
+
+  override fun serialize(encoder: Encoder, value: Int) = encoder.encodeString(value.toString())
+
+  override fun deserialize(decoder: Decoder): Int = decoder.decodeString().toInt()
+}
+
+/** A property-level serializer changes the wire shape in a way the property's type cannot show. */
+@Serializable
+data class AllowedValuesCustomSerializerDto(
+    @AllowedValues(SushiPieces::class)
+    @Serializable(with = IntAsStringSerializer::class)
+    val pieces: Int
+) {
+  companion object {
+    val example = AllowedValuesCustomSerializerDto(8)
+  }
+}
+
+/** The motivating case: the same field allows different values on each subclass. */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@Serializable
+@kotlinx.serialization.json.JsonClassDiscriminator("dish")
+sealed interface DishOrder {
+  val pieces: Int
+
+  @Serializable
+  @SerialName("sushi")
+  data class SushiOrder(@AllowedValues(SushiPieces::class) override val pieces: Int) : DishOrder {
+    init {
+      SushiPieces.requireAllowed(pieces, "pieces")
+    }
+
+    companion object {
+      val example = SushiOrder(8)
+    }
+  }
+
+  @Serializable
+  @SerialName("dumplings")
+  data class DumplingOrder(@AllowedValues(DumplingPieces::class) override val pieces: Int) :
+      DishOrder {
+    init {
+      DumplingPieces.requireAllowed(pieces, "pieces")
+    }
+
+    companion object {
+      val example = DumplingOrder(10)
+    }
+  }
+}
+
+@Serializable
+data class DishOrderRequestDto(val order: DishOrder) {
+  companion object {
+    val example = DishOrderRequestDto(DishOrder.SushiOrder.example)
+  }
+}

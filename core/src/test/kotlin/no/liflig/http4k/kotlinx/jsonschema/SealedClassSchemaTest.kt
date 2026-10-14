@@ -1,6 +1,7 @@
 package no.liflig.http4k.kotlinx.jsonschema
 
 import io.kotest.matchers.collections.shouldContain
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.maps.shouldContainKey
 import io.kotest.matchers.maps.shouldNotContainKey
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -8,8 +9,10 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import org.http4k.format.KotlinxSerialization
 import org.junit.jupiter.api.Test
 
 /** Sealed hierarchies: `oneOf`, discriminators, subclass examples, and how they nest. */
@@ -259,5 +262,38 @@ class SealedClassSchemaTest {
 
     fromDirect shouldBe fromBase
     (fromDirect as JsonPrimitive).content shouldBe "The import finished without errors."
+  }
+
+  @Test
+  fun `ONE_OF strategy renders oneOf without the discriminator object`() {
+    val creator =
+        KotlinxSerializationJsonSchemaCreator<JsonElement>(
+            json = KotlinxSerialization,
+            kotlinxJson = kotlinxJson,
+            sealedClassStrategy = SealedClassStrategy.ONE_OF,
+        )
+    val schema = creator.toSchema(DishOrderRequestDto.example)
+
+    val parent = schema.definitions["DishOrder"] as JsonObject
+    parent shouldNotContainKey "discriminator"
+    (parent["oneOf"] as JsonArray).map {
+      ((it as JsonObject)["\$ref"] as JsonPrimitive).content
+    } shouldContainExactlyInAnyOrder
+        listOf("#/components/schemas/SushiOrder", "#/components/schemas/DumplingOrder")
+
+    // Subclasses are unchanged: each still pins and requires the discriminator property, which is
+    // what keeps the oneOf branches disjoint without the discriminator object.
+    val sushi = schema.definitions["SushiOrder"] as JsonObject
+    val dish = (sushi["properties"] as JsonObject)["dish"] as JsonObject
+    (dish["enum"] as JsonArray).map { (it as JsonPrimitive).content } shouldBe listOf("sushi")
+    (sushi["required"] as JsonArray).map { (it as JsonPrimitive).content } shouldContain "dish"
+  }
+
+  @Test
+  fun `default strategy keeps the discriminator object`() {
+    val parent = schemaCreator.toSchema(DishOrderRequestDto.example).definitions["DishOrder"]
+    (parent as JsonObject) shouldContainKey "discriminator"
+    ((parent["discriminator"] as JsonObject)["propertyName"] as JsonPrimitive).content shouldBe
+        "dish"
   }
 }

@@ -42,8 +42,11 @@ Source layout table is the canonical module map). Two packages:
 
 Source files:
 
-- `Description.kt` (module `annotations`) — the `@Description` annotation. Zero dependencies
-  by design; every file below lives in module `core`.
+- `Description.kt`, `AllowedValues.kt` and `AllowedValuesProvider.kt` (module
+  `annotations`) — the `@Description` and `@AllowedValues` annotations, and the interface
+  whose `object` instances hold `@AllowedValues`' values. Zero dependencies by design,
+  which is why `@AllowedValues` is a plain runtime annotation read by reflection rather
+  than a kotlinx `@SerialInfo` one; every file below lives in module `core`.
 - `KotlinxSerializationJsonSchemaCreator.kt` — the public entry point (implements http4k's
   `JsonSchemaCreator<Any, NODE>`). Resolves the root example's serializer, JSON and
   `KType`, then runs one `SchemaWalk` over a fresh `DefinitionRegistry`.
@@ -58,6 +61,8 @@ Source files:
   sealed levels.
 - `NullableStrategy.kt` — `TYPE_ARRAY` (default, generator-friendly) vs `ANYOF`
   (spec-strict).
+- `SealedClassStrategy.kt` — `DISCRIMINATED_ONE_OF` (default, `oneOf` + `discriminator`)
+  vs `ONE_OF` (plain `oneOf`). Only the sealed parent's definition differs.
 - `KotlinxOpenApi3Renderer.kt` — `ApiRenderer`: tries `JsonToJsonSchema` for NODE bodies,
   hands everything else to the creator, and strips nulls from the rendered document
   outside body examples.
@@ -132,6 +137,9 @@ is read from that annotation, falling back to `Json.classDiscriminator`. Example
 - A sealed subtype under the sealed parent is recursed into, matching
   `collectLeafSubclasses`; its own companion is not read.
 
+Under `SealedClassStrategy.ONE_OF` the parent definition is the `oneOf` alone, without the
+`discriminator` object; subclass definitions are built identically under both strategies.
+
 `PolymorphicKind.OPEN` is rejected outright — the runtime-dynamic subclass set can't be
 expressed as static JSON Schema.
 
@@ -193,7 +201,7 @@ a service on a warm JVM the per-request cost is a few milliseconds.
 
 - `mvn test` — unit + approval tests, split by concern: schema structure, sealed
   hierarchies, definition naming and property annotations under `jsonschema`; end-to-end
-  rendering and example payloads under `openapi`. 93 tests.
+  rendering and example payloads under `openapi`. 116 tests.
 - `mvn verify` — full build (format check + tests).
 - `mvn spotless:apply` — apply ktfmt formatting.
 - `mvn versions:display-dependency-updates versions:display-parent-updates versions:display-property-updates`
@@ -241,6 +249,17 @@ parses cleanly (no schema-validity bugs slip through).
   not used: it is `@ExperimentalSerializationApi`, and serial-info annotations on
   constructor-parameters-as-properties are silently dropped without an explicit target —
   which is how essentially every DTO in Liflig services declares its fields.
+
+- **`@AllowedValues` holds a class reference, not values.** Annotation parameters cannot
+  be generic, so the only way one annotation carries typed values of every primitive type
+  is to point at an `AllowedValuesProvider` `object`. `withAllowedValues` encodes each value
+  with the serializer for the property's *type* (not its descriptor, which has no
+  serializer), so value classes and contextual types render as on the wire. The compiler
+  cannot tie the provider's `T` to the property, so `withAllowedValues` checks it, and
+  fails fast on everything else that would publish an unsatisfiable schema: a non-object
+  or empty provider, a non-primitive property (an enum class renders as `$ref`, where a
+  sibling `enum` is ignored), a property-level serializer whose kind differs from the
+  type's, and an example the constraint rejects.
 
 - **A type's description goes to the definition or the use site, never both.** A type that
   renders as `$ref` owns a definition, so `withClassDescription` puts its `@Description`

@@ -9,6 +9,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import no.liflig.http4k.kotlinx.jsonschema.AllowedValues
+import no.liflig.http4k.kotlinx.jsonschema.AllowedValuesProvider
 import no.liflig.http4k.kotlinx.jsonschema.KotlinxSerializationJsonSchemaCreator
 import org.http4k.contract.contract
 import org.http4k.contract.openapi.ApiInfo
@@ -68,6 +70,16 @@ data class DescribedPropertyDto(
     val fromType: DescribedCodeDto,
     @no.liflig.http4k.kotlinx.jsonschema.Description("Described alongside a reference.")
     val describedEvent: EventPayload,
+)
+
+object PortionCounts : AllowedValuesProvider<Int> {
+  override val values = setOf(1, 2)
+}
+
+/** Nullable, so its `enum` carries a `null` that the renderer's null-stripping must keep. */
+@Serializable
+data class AllowedValuesPropertyDto(
+    @AllowedValues(PortionCounts::class) val portions: Int?,
 )
 
 @Suppress("DEPRECATION")

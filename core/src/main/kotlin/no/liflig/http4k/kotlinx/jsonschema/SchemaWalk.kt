@@ -4,6 +4,7 @@ import kotlin.reflect.KClass
 import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
 import kotlin.reflect.full.starProjectedType
+import kotlin.reflect.full.withNullability
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.descriptors.PolymorphicKind
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -33,6 +34,7 @@ internal class SchemaWalk<NODE : Any>(
     private val sealedClassExampleProvider: SealedClassExampleProvider,
     private val formatMappings: Map<String, String>,
     private val nullableStrategy: NullableStrategy,
+    private val sealedClassStrategy: SealedClassStrategy,
 ) {
 
   /**
@@ -220,6 +222,87 @@ internal class SchemaWalk<NODE : Any>(
   private fun withDescription(schema: NODE, description: String): NODE =
       schema.plusField("description", json.string(description))
 
+  /**
+   * Appends `"enum"` from an [AllowedValues] annotation to an already-built property schema.
+   *
+   * Applied after [wrapNullable], like the other property markers, so it lands on the outer object:
+   * beside the `type` array under [NullableStrategy.TYPE_ARRAY] and beside `anyOf` under
+   * [NullableStrategy.ANYOF]. Because `enum` then constrains the whole property, a nullable
+   * property gets `null` added to it; without that, `{"type": ["integer", "null"], "enum": [6, 8]}`
+   * would silently reject the `null` the type admits.
+   *
+   * Each value is encoded with the serializer for the property's type, so it renders exactly as the
+   * property does on the wire — a value class as its inner value, a contextual type as its
+   * registered serializer writes it. Every mistake the annotation cannot rule out at compile time
+   * fails fast here instead, naming the property: a provider that is not an `object` or is empty, a
+   * value of the wrong type, a property that does not serialize as a primitive, and an example that
+   * the constraint itself rejects, which would publish an example invalid against its own schema.
+   */
+  private fun withAllowedValues(
+      schema: NODE,
+      allowedValues: AllowedValues,
+      property: KProperty1<*, *>,
+      elementDescriptor: SerialDescriptor,
+      elementName: String,
+      example: JsonElement?,
+  ): NODE {
+    val label = "@AllowedValues(${allowedValues.provider.simpleName}::class) on '$elementName'"
+    val kind = serializedDescriptorOf(elementDescriptor).kind
+    require(kind is PrimitiveKind) {
+      "$label requires a property serialized as a primitive, but it serializes as $kind. " +
+          "For a fixed set of names, use an enum class."
+    }
+    val values = allowedValuesOf(allowedValues, label)
+    require(values.isNotEmpty()) { "$label: the provider lists no values" }
+
+    val propertyType = property.returnType.withNullability(false)
+    val propertyClass = propertyType.classifier as? KClass<*>
+    values
+        .firstOrNull { propertyClass != null && !propertyClass.isInstance(it) }
+        ?.let {
+          throw IllegalArgumentException(
+              "$label: the provider's value $it is a ${it::class.qualifiedName}, but the " +
+                  "property is a ${propertyClass?.qualifiedName}"
+          )
+        }
+
+    val serializer =
+        try {
+          kotlinxJson.serializersModule.serializer(propertyType)
+        } catch (e: kotlinx.serialization.SerializationException) {
+          throw IllegalArgumentException("$label: no serializer for $propertyType", e)
+        }
+    // A property-level `@Serializable(with = ...)` is invisible from the type alone; refuse rather
+    // than render values in a shape the property does not use.
+    require(serializedDescriptorOf(serializer.descriptor).kind == kind) {
+      "$label: the property's own serializer writes $kind, but its type's serializer does not, " +
+          "so the values cannot be rendered as the property writes them"
+    }
+    val encoded = values.map { kotlinxJson.encodeToJsonElement(serializer, it) }.distinct()
+
+    if (example != null && example !is JsonNull) {
+      require(example in encoded) {
+        "$label: the example value $example is not one of the allowed values $encoded"
+      }
+    }
+
+    val allowed =
+        encoded.map { convertJsonElement(it) } +
+            if (elementDescriptor.isNullable) listOf(json.nullNode()) else emptyList()
+    return schema.plusField("enum", json.array(allowed))
+  }
+
+  /** The descriptor whose kind reaches the wire: inline value classes and contextuals unwrapped. */
+  private fun serializedDescriptorOf(descriptor: SerialDescriptor): SerialDescriptor =
+      when {
+        descriptor.isInline -> serializedDescriptorOf(descriptor.getElementDescriptor(0))
+        descriptor.kind == SerialKind.CONTEXTUAL ->
+            kotlinxJson.serializersModule.getContextualDescriptor(descriptor)?.let {
+              serializedDescriptorOf(it)
+            } ?: descriptor
+        else -> descriptor
+      }
+
   private fun withDefaultValue(schema: NODE, value: JsonElement): NODE =
       schema.plusField("default", convertJsonElement(value))
 
@@ -381,9 +464,22 @@ internal class SchemaWalk<NODE : Any>(
               jsonObj?.get(elementName),
               property?.returnType,
           )
+      val constrainedSchema =
+          property
+              ?.let { allowedValuesOn(it) }
+              ?.let {
+                withAllowedValues(
+                    elementSchema,
+                    it,
+                    property,
+                    descriptor.getElementDescriptor(i),
+                    elementName,
+                    jsonObj?.get(elementName),
+                )
+              } ?: elementSchema
       val describedSchema =
-          descriptionOf(property, elementSchema)?.let { withDescription(elementSchema, it) }
-              ?: elementSchema
+          descriptionOf(property, constrainedSchema)?.let { withDescription(constrainedSchema, it) }
+              ?: constrainedSchema
       val deprecatedSchema =
           if (isDeprecated(property)) withDeprecatedMarker(describedSchema) else describedSchema
 
@@ -463,22 +559,27 @@ internal class SchemaWalk<NODE : Any>(
                   )
             }
 
-    return withClassDescription(
-        json.obj(
-            "oneOf" to json.array(identityByDiscriminator.values.map { registry.ref(it) }),
-            "discriminator" to
-                json.obj(
-                    "propertyName" to json.string(classDiscriminator),
-                    "mapping" to
-                        json.obj(
-                            identityByDiscriminator.map { (value, identity) ->
-                              value to json.string(registry.refPath(identity))
-                            }
-                        ),
-                ),
-        ),
-        sealedKClass,
-    )
+    val oneOf = "oneOf" to json.array(identityByDiscriminator.values.map { registry.ref(it) })
+    val parent =
+        when (sealedClassStrategy) {
+          SealedClassStrategy.DISCRIMINATED_ONE_OF ->
+              json.obj(
+                  oneOf,
+                  "discriminator" to
+                      json.obj(
+                          "propertyName" to json.string(classDiscriminator),
+                          "mapping" to
+                              json.obj(
+                                  identityByDiscriminator.map { (value, identity) ->
+                                    value to json.string(registry.refPath(identity))
+                                  }
+                              ),
+                      ),
+              )
+          // Each subclass still pins the discriminator property, so the branches stay disjoint.
+          SealedClassStrategy.ONE_OF -> json.obj(oneOf)
+        }
+    return withClassDescription(parent, sealedKClass)
   }
 
   /** Registers the definition for one sealed subclass and returns its identity. */

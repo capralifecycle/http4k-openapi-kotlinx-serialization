@@ -35,6 +35,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
         DefaultSealedClassExampleProvider(),
     private val formatMappings: Map<String, String> = emptyMap(),
     private val nullableStrategy: NullableStrategy = NullableStrategy.TYPE_ARRAY,
+    private val sealedClassStrategy: SealedClassStrategy = SealedClassStrategy.DISCRIMINATED_ONE_OF,
 ) : JsonSchemaCreator<Any, NODE> {
 
   companion object {
@@ -77,6 +78,7 @@ class KotlinxSerializationJsonSchemaCreator<NODE : Any>(
             sealedClassExampleProvider,
             formatMappings,
             nullableStrategy,
+            sealedClassStrategy,
         )
     val node = walk.schemaFor(root.descriptor, root.jsonElement, root.kType)
 

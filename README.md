@@ -104,7 +104,7 @@ You also need http4k's OpenAPI and kotlinx.serialization dependencies. See the p
 
 `@Description` is most useful on shared vocabulary types — a `TrainNumber` or a `NominalDate` described once, rather than at every field holding it. Those types usually live in a domain-types library that has no business depending on http4k.
 
-For that case, depend on the annotations artifact alone. It carries `@Description` and nothing else, and pulls in no dependencies beyond `kotlin-stdlib`:
+For that case, depend on the annotations artifact alone. It carries `@Description`, `@AllowedValues` and `AllowedValuesProvider` and nothing else, and pulls in no dependencies beyond `kotlin-stdlib`:
 
 ```xml
 <dependency>
@@ -114,7 +114,7 @@ For that case, depend on the annotations artifact alone. It carries `@Descriptio
 </dependency>
 ```
 
-The main artifact depends on it at compile scope, so a service that already has `http4k-openapi-kotlinx-serialization` needs no second entry — the annotation is on its classpath either way, under the same `no.liflig.http4k.kotlinx.jsonschema` package.
+The main artifact depends on it at compile scope, so a service that already has `http4k-openapi-kotlinx-serialization` needs no second entry — the annotation is on its classpath either way, under the same `no.liflig.http4k.kotlinx.jsonschema` package. The same holds for `@AllowedValues` and `AllowedValuesProvider`.
 
 ## Integration
 
@@ -401,6 +401,55 @@ The cross-link is real maintainer value that an annotation cannot express — KD
 
 Deciding by audience rather than by "avoid duplication" answers the awkward case too. When a fact serves both readers, it belongs in `@Description` and KDoc stays quiet.
 
+### Allowed values
+
+`@AllowedValues` restricts a property to a fixed set of values, rendering as `"enum"` on that property. It is for constraints a Kotlin type cannot express — typically the same field allowing different values on each subclass of a sealed hierarchy.
+
+The values live in an `AllowedValuesProvider` `object`, referenced by class. Annotation parameters cannot be generic, so a class reference is the only way one annotation can carry typed values of every type. The same object then enforces the constraint at runtime, so the documented set and the checked set cannot drift apart:
+
+```kotlin
+object SushiPieces : AllowedValuesProvider<Int> {
+  override val values = setOf(6, 8, 12)
+}
+
+object DumplingPieces : AllowedValuesProvider<Int> {
+  override val values = setOf(5, 10, 15)
+}
+
+@Serializable
+@JsonClassDiscriminator("dish")
+sealed interface Order {
+  @Serializable @SerialName("sushi")
+  data class SushiOrder(@AllowedValues(SushiPieces::class) val pieces: Int) : Order {
+    init { SushiPieces.requireAllowed(pieces, "pieces") }
+  }
+
+  @Serializable @SerialName("dumplings")
+  data class DumplingOrder(@AllowedValues(DumplingPieces::class) val pieces: Int) : Order {
+    init { DumplingPieces.requireAllowed(pieces, "pieces") }
+  }
+}
+```
+
+```json
+"SushiOrder": {
+  "type": "object",
+  "properties": {
+    "dish": { "type": "string", "enum": ["sushi"] },
+    "pieces": { "type": "integer", "format": "int32", "enum": [6, 8, 12] }
+  },
+  "required": ["dish", "pieces"]
+}
+```
+
+- **Any primitive property**: `Int`, `Long`, `Short`, `Byte`, `Double`, `Float`, `Boolean`, `String`, `Char`, unsigned types, and value classes or contextual types that serialize as one. Each value is encoded with the property's serializer, so it renders the way the property is written on the wire — `Kg(1500)` as `1500`, a contextual `LocalDate` as its string.
+- **Not enum classes or structures**: an enum-class property renders as `$ref`, and an `enum` beside a `$ref` is ignored by OpenAPI 3.0 and most generators, so it is rejected; declare a narrower enum class instead. Lists, maps and objects are rejected too.
+- **Nullable properties**: `null` is added to the `enum`, which sits on the outer schema like `description` does — beside the `type` array under `TYPE_ARRAY`, beside `anyOf` under `ANYOF`. Without it, `{"type": ["integer", "null"], "enum": [5, 10]}` would reject the `null` the type admits. Provider values themselves are never null.
+- **Checked at schema generation**: the compiler cannot tie the provider's type to the property's, so the schema creator does, and fails with an `IllegalArgumentException` naming the property when the provider is not an `object`, is empty, holds values of another type, or when the example uses a value the constraint rejects (it would otherwise be published invalid against its own schema). A property-level `@Serializable(with = ...)` that changes the wire type is rejected too, since the values could not be rendered as the property writes them.
+- **Documentation, not validation**: kotlinx.serialization does not validate against the schema. Call `requireAllowed(value, "name")` from an `init` block, as above, to turn a disallowed value into a deserialization failure — and so a `400` from an http4k body lens. `value in SushiPieces` works too.
+
+`@get:AllowedValues` works for the use-site form, as with `@Description`. The annotation must sit on the concrete class's property: one on a sealed interface's abstract `val` is not inherited by the overrides.
+
 ### Inline value classes
 
 Kotlinx-serialization's compiler plugin generates a `descriptor.isInline = true` descriptor for `@JvmInline value class X(val value: Y)`. The schema creator unwraps these: the schema for `X` is the schema for `Y`. This matters for Liflig services that use inline value classes for type-safe IDs:
@@ -442,6 +491,25 @@ schema.toSchema(TaskStatusDto.OPEN, overrideDefinitionId = "status")
 ```
 
 If you genuinely need two differently-named schemas for one enum, declare a second enum type.
+
+### Sealed class strategy
+
+The `sealedClassStrategy` parameter controls the parent definition of a sealed hierarchy. Subclass definitions are the same either way: the discriminator property is required and pinned to the subclass's serial name with a single-value `enum`.
+
+```kotlin
+val schema = KotlinxSerializationJsonSchemaCreator<JsonElement>(
+    json = KotlinxSerialization,
+    kotlinxJson = kotlinxJson,
+    sealedClassStrategy = SealedClassStrategy.ONE_OF,
+)
+```
+
+| Strategy | Parent definition | Best for |
+| -------- | ----------------- | -------- |
+| `DISCRIMINATED_ONE_OF` (default) | `oneOf` of `$ref`s plus an OpenAPI `discriminator` with `propertyName` and `mapping` | Generators that dispatch on the discriminator value |
+| `ONE_OF` | `oneOf` of `$ref`s only | Consumers that should rely on plain JSON Schema rather than the OpenAPI-specific `discriminator` keyword |
+
+Under `ONE_OF` the branches stay disjoint because each subclass pins the discriminator property. `openapi-generator-cli` (`typescript-fetch`) still generates a union of the subclass types, deserializing by checking each branch's pinned discriminator value in turn rather than switching on it. A single-value `enum` is used for the pin rather than `const` so the output stays valid under OpenAPI 3.0.
 
 ### Sealed class example discovery
 

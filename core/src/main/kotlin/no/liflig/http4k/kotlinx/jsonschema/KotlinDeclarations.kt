@@ -104,6 +104,29 @@ internal fun descriptionOn(property: KProperty1<*, *>): String? =
         .firstOrNull()
         ?.value
 
+/**
+ * The [AllowedValues] declared on [property] itself or on its getter, so the `@get:AllowedValues`
+ * use-site form works, as it does for [Description].
+ */
+internal fun allowedValuesOn(property: KProperty1<*, *>): AllowedValues? =
+    (property.annotations + property.getter.annotations)
+        .filterIsInstance<AllowedValues>()
+        .firstOrNull()
+
+/**
+ * The values of the provider [annotation] names, read from its `object` instance. [label] names the
+ * annotated property in the error thrown when the provider is not an `object`.
+ */
+internal fun allowedValuesOf(annotation: AllowedValues, label: String): Set<Any> {
+  val provider =
+      annotation.provider.objectInstance
+          ?: throw IllegalArgumentException(
+              "$label: ${annotation.provider.qualifiedName} must be declared as an `object`, " +
+                  "so its values can be read without constructing it"
+          )
+  return provider.values
+}
+
 /** The [Description] declared on [kClass], if any. */
 internal fun descriptionOn(kClass: KClass<*>?): String? =
     kClass?.annotations?.filterIsInstance<Description>()?.firstOrNull()?.value

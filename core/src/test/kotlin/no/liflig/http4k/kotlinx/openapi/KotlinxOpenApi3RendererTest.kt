@@ -340,6 +340,45 @@ class KotlinxOpenApi3RendererTest {
   }
 
   @Test
+  fun `a null in allowed values survives rendering and validates as openapi 3_1`() {
+    val responseLens = Body.auto<AllowedValuesPropertyDto>().toLens()
+
+    val app = buildContract {
+      routes +=
+          "/allowed" meta
+              {
+                summary = "Allowed values"
+                returning(OK, responseLens to AllowedValuesPropertyDto(null))
+              } bindContract
+              GET to
+              { _ ->
+                Response(OK)
+              }
+    }
+
+    val response = app(Request(GET, "/"))
+    response.status.code shouldBe 200
+    val spec = KotlinxJson.parseToJsonElement(response.bodyString()).jsonObject
+
+    val schemas = spec["components"]?.jsonObject?.get("schemas")?.jsonObject.shouldNotBeNull()
+    val portions =
+        schemas["AllowedValuesPropertyDto"]
+            ?.jsonObject
+            ?.get("properties")
+            ?.jsonObject
+            ?.get("portions")
+            ?.jsonObject
+            .shouldNotBeNull()
+
+    // The null-stripping pass drops null object fields, never array elements.
+    portions["enum"]?.jsonArray?.map { it.toString() } shouldBe listOf("1", "2", "null")
+
+    val parseResult =
+        io.swagger.parser.OpenAPIParser().readContents(response.bodyString(), null, null)
+    parseResult.messages.orEmpty().shouldBeEmpty()
+  }
+
+  @Test
   fun `descriptions survive rendering and validate as openapi 3_1`() {
     val responseLens = Body.auto<DescribedPropertyDto>().toLens()
 
