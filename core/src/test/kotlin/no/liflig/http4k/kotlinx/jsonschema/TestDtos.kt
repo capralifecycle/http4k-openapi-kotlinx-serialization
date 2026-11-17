@@ -1097,3 +1097,106 @@ data class DishOrderRequestDto(val order: DishOrder) {
     val example = DishOrderRequestDto(DishOrder.SushiOrder.example)
   }
 }
+
+// --- @KnownValues ---
+
+object KnownReasons : KnownValuesProvider<String> {
+  override val values = setOf("OUT_OF_STOCK", "KITCHEN_CLOSED")
+}
+
+@JvmInline @Serializable value class ReasonCode(val value: String)
+
+object KnownReasonCodes : KnownValuesProvider<ReasonCode> {
+  override val values = setOf(ReasonCode("OUT_OF_STOCK"), ReasonCode("KITCHEN_CLOSED"))
+}
+
+object KnownHttpStatuses : KnownValuesProvider<Int> {
+  override val values = setOf(404, 409)
+}
+
+@Serializable
+data class KnownValuesDto(
+    @KnownValues(KnownReasons::class) val reason: String,
+    @KnownValues(KnownReasons::class) val nullableReason: String?,
+    @KnownValues(KnownReasonCodes::class) val reasonCode: ReasonCode,
+    @KnownValues(KnownHttpStatuses::class) val status: Int,
+    @get:KnownValues(KnownReasons::class) val viaGetter: String,
+    val unannotated: String,
+) {
+  companion object {
+    // `reason` holds a value the provider does not list: an open set admits it.
+    val example =
+        KnownValuesDto(
+            "NOT_KNOWN_YET",
+            null,
+            ReasonCode("OUT_OF_STOCK"),
+            404,
+            "KITCHEN_CLOSED",
+            "free text",
+        )
+  }
+}
+
+@Serializable
+data class KnownValuesTypeMismatchDto(@KnownValues(KnownHttpStatuses::class) val reason: String) {
+  companion object {
+    val example = KnownValuesTypeMismatchDto("OUT_OF_STOCK")
+  }
+}
+
+@Serializable
+data class KnownValuesOnEnumDto(@KnownValues(KnownReasons::class) val choice: TestEnum) {
+  companion object {
+    val example = KnownValuesOnEnumDto(TestEnum.VALUE_A)
+  }
+}
+
+class NotAnObjectReasons : KnownValuesProvider<String> {
+  override val values = setOf("OUT_OF_STOCK")
+}
+
+@Serializable
+data class KnownValuesNotAnObjectDto(@KnownValues(NotAnObjectReasons::class) val reason: String) {
+  companion object {
+    val example = KnownValuesNotAnObjectDto("OUT_OF_STOCK")
+  }
+}
+
+object NoReasons : KnownValuesProvider<String> {
+  override val values = emptySet<String>()
+}
+
+@Serializable
+data class KnownValuesEmptyDto(@KnownValues(NoReasons::class) val reason: String) {
+  companion object {
+    val example = KnownValuesEmptyDto("OUT_OF_STOCK")
+  }
+}
+
+/** The example is outside [Sizes], so `@AllowedValues` alone would also reject this class. */
+@Serializable
+data class KnownAndDisallowedValuesDto(
+    @KnownValues(KnownReasons::class) @AllowedValues(Sizes::class) val size: String
+) {
+  companion object {
+    val example = KnownAndDisallowedValuesDto("XXL")
+  }
+}
+
+@Serializable
+data class AllowedValuesNotAnObjectOnListDto(
+    @AllowedValues(NotAnObjectSizes::class) val sizes: List<String>
+) {
+  companion object {
+    val example = AllowedValuesNotAnObjectOnListDto(listOf("S"))
+  }
+}
+
+@Serializable
+data class KnownAndAllowedValuesDto(
+    @KnownValues(KnownReasons::class) @AllowedValues(Sizes::class) val size: String
+) {
+  companion object {
+    val example = KnownAndAllowedValuesDto("M")
+  }
+}

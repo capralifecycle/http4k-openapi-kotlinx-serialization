@@ -42,11 +42,12 @@ Source layout table is the canonical module map). Two packages:
 
 Source files:
 
-- `Description.kt`, `AllowedValues.kt` and `AllowedValuesProvider.kt` (module
-  `annotations`) — the `@Description` and `@AllowedValues` annotations, and the interface
-  whose `object` instances hold `@AllowedValues`' values. Zero dependencies by design,
-  which is why `@AllowedValues` is a plain runtime annotation read by reflection rather
-  than a kotlinx `@SerialInfo` one; every file below lives in module `core`.
+- `Description.kt`, `AllowedValues.kt`, `AllowedValuesProvider.kt`, `KnownValues.kt` and
+  `KnownValuesProvider.kt` (module `annotations`) — the `@Description`, `@AllowedValues`
+  and `@KnownValues` annotations, and the interfaces whose `object` instances hold the
+  values of the last two. Zero dependencies by design, which is why they are plain
+  runtime annotations read by reflection rather than kotlinx `@SerialInfo` ones; every
+  file below lives in module `core`.
 - `KotlinxSerializationJsonSchemaCreator.kt` — the public entry point (implements http4k's
   `JsonSchemaCreator<Any, NODE>`). Resolves the root example's serializer, JSON and
   `KType`, then runs one `SchemaWalk` over a fresh `DefinitionRegistry`.
@@ -260,6 +261,15 @@ parses cleanly (no schema-validity bugs slip through).
   or empty provider, a non-primitive property (an enum class renders as `$ref`, where a
   sibling `enum` is ignored), a property-level serializer whose kind differs from the
   type's, and an example the constraint rejects.
+- **`@KnownValues` is `@AllowedValues` without the constraint.** It renders the provider's
+  values as `examples`, an annotation keyword, in place of `enum`. `withKnownValues` and
+  `withAllowedValues` share `encodedValuesOf`, so the values are encoded and checked the
+  same way. Two rules differ because `examples` constrains nothing: `null` is not added
+  for a nullable property, and the property's example can hold a value the provider does
+  not list. A property with both annotations is rejected in `classToSchema`, before
+  either is rendered: a set is open or closed, not both. `encodedValuesOf` encodes with
+  the serializer of the property's type, so a property-level serializer that keeps the
+  wire type but writes another value is not detected.
 
 - **A type's description goes to the definition or the use site, never both.** A type that
   renders as `$ref` owns a definition, so `withClassDescription` puts its `@Description`

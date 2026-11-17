@@ -104,7 +104,7 @@ You also need http4k's OpenAPI and kotlinx.serialization dependencies. See the p
 
 `@Description` is most useful on shared vocabulary types — a `TrainNumber` or a `NominalDate` described once, rather than at every field holding it. Those types usually live in a domain-types library that has no business depending on http4k.
 
-For that case, depend on the annotations artifact alone. It carries `@Description`, `@AllowedValues` and `AllowedValuesProvider` and nothing else, and pulls in no dependencies beyond `kotlin-stdlib`:
+For that case, depend on the annotations artifact alone. It carries `@Description`, `@AllowedValues`, `@KnownValues` and their provider interfaces, and nothing else, and pulls in no dependencies beyond `kotlin-stdlib`:
 
 ```xml
 <dependency>
@@ -449,6 +449,52 @@ sealed interface Order {
 - **Documentation, not validation**: kotlinx.serialization does not validate against the schema. Call `requireAllowed(value, "name")` from an `init` block, as above, to turn a disallowed value into a deserialization failure — and so a `400` from an http4k body lens. `value in SushiPieces` works too.
 
 `@get:AllowedValues` works for the use-site form, as with `@Description`. The annotation must sit on the concrete class's property: one on a sealed interface's abstract `val` is not inherited by the overrides.
+
+### Known values of an open set
+
+`@KnownValues` lists the values of an open set that this version of the API knows. It renders as `"examples"` on the property, and the property keeps its own type, so every other value stays valid.
+
+**Why.** A JSON Schema `enum` is a closed set: it tells a client that no other value can occur. A client generated from it, or one that decodes with the producer's enum class, fails on a value that the producer adds later. Each new value is then a breaking change. For a set that grows, such as reason codes and error codes, an open set makes the promise that the producer can keep: values are added, and a known value is not removed, renamed or given another meaning. The client must have a fallback for a value it does not know.
+
+The values come from a `KnownValuesProvider` `object`, usually the companion of the enum that the producer uses for the set. The published list is then read from the same declaration as the code that writes the values, so the two cannot drift, and a new value shows as a change in the rendered document:
+
+```kotlin
+enum class RejectionReason {
+  OUT_OF_STOCK,
+  KITCHEN_CLOSED;
+
+  companion object : KnownValuesProvider<String> {
+    override val values = entries.map { it.name }.toSet()
+  }
+}
+
+@Serializable
+data class Rejection(
+    @KnownValues(RejectionReason.Companion::class)
+    @Description("Why the order was rejected. An open set: show `detail` for a reason you do not know.")
+    val reason: String,
+    val detail: String,
+)
+```
+
+```json
+"reason": {
+  "type": "string",
+  "examples": ["OUT_OF_STOCK", "KITCHEN_CLOSED"],
+  "description": "Why the order was rejected. An open set: show `detail` for a reason you do not know."
+}
+```
+
+- **Declare the property as `String`**, not as the enum class, and fill it with `RejectionReason.OUT_OF_STOCK.name`. A consumer that decodes with the producer's classes must be able to read a value that its version of the enum does not have. The producer keeps the enum, and its exhaustive `when`, on its own side.
+- **State the fallback** in the property's `@Description`. An open set without a rule for unknown values only moves the failure from the decoder to the client's logic.
+- **Why `examples`**: OpenAPI has no construct for an open enum. `examples` is a standard JSON Schema annotation keyword in OpenAPI 3.1, and validators ignore it. The other encodings in use have costs. Vendor extensions such as `x-extensible-enum` are read only by the tools of that vendor. `anyOf` of an `enum` and a `string` is rendered by `openapi-generator`'s `typescript-fetch` (7.21.0) as an empty interface, where `type: string` with `examples` is rendered as `string`.
+- **When to keep a closed set**: for a set that is fixed, for input that the service validates, and for a value that a client must handle case by case, use an enum class or `@AllowedValues`. A new value there is a breaking change, and the schema says so.
+- **OpenAPI 3.1 only**: the Schema Object of OpenAPI 3.0 has `example` but not `examples`. A document rendered with `version = OpenApiVersion._3_0_0` then holds a keyword that 3.0 does not define, so use `@KnownValues` with 3.1.
+- **Nullable properties**: `null` is not added to `examples`; the property's type admits it.
+- **Property-level serializers**: each value is encoded with the serializer of the property's type. A `@Serializable(with = ...)` on the property that keeps the JSON type but writes another value is not detected. The same limit applies to `@AllowedValues`.
+- **Checked at schema generation**: as for `@AllowedValues`, with two differences. An example value outside the known values is accepted, because the set is open. A property with `@KnownValues` and `@AllowedValues` is rejected, because the two contradict each other.
+
+`@get:KnownValues` works for the use-site form.
 
 ### Inline value classes
 

@@ -113,6 +113,17 @@ class AllowedValuesTest {
   }
 
   @Test
+  fun `reports the unsupported type before a provider that is not an object`() {
+    val error =
+        shouldThrow<IllegalArgumentException> {
+          schemaCreator.toSchema(AllowedValuesNotAnObjectOnListDto.example)
+        }
+
+    error.message shouldContain "'sizes'"
+    error.message shouldContain "LIST"
+  }
+
+  @Test
   fun `rejects a provider that is not an object`() {
     val error =
         shouldThrow<IllegalArgumentException> {
