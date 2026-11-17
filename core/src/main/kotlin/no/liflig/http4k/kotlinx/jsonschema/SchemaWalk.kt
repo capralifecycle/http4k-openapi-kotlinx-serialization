@@ -247,12 +247,78 @@ internal class SchemaWalk<NODE : Any>(
       example: JsonElement?,
   ): NODE {
     val label = "@AllowedValues(${allowedValues.provider.simpleName}::class) on '$elementName'"
+    val encoded =
+        encodedValuesOf(
+            label,
+            { allowedValuesOf(allowedValues, label) },
+            property,
+            elementDescriptor,
+            unsupportedTypeHint = "For a fixed set of names, use an enum class.",
+        )
+
+    if (example != null && example !is JsonNull) {
+      require(example in encoded) {
+        "$label: the example value $example is not one of the allowed values $encoded"
+      }
+    }
+
+    val allowed =
+        encoded.map { convertJsonElement(it) } +
+            if (elementDescriptor.isNullable) listOf(json.nullNode()) else emptyList()
+    return schema.plusField("enum", json.array(allowed))
+  }
+
+  /**
+   * Appends `"examples"` from a [KnownValues] annotation to an already-built property schema.
+   *
+   * Applied after [wrapNullable], like the other property markers, so it lands on the outer object.
+   * `examples` is an annotation keyword and constrains nothing, so two rules of [withAllowedValues]
+   * do not apply: `null` is not added for a nullable property, and the property's example can hold
+   * a value that the provider does not list. An open set admits every value of the property's type.
+   */
+  private fun withKnownValues(
+      schema: NODE,
+      knownValues: KnownValues,
+      property: KProperty1<*, *>,
+      elementDescriptor: SerialDescriptor,
+      elementName: String,
+  ): NODE {
+    val label = "@KnownValues(${knownValues.provider.simpleName}::class) on '$elementName'"
+    val encoded =
+        encodedValuesOf(
+            label,
+            { knownValuesOf(knownValues, label) },
+            property,
+            elementDescriptor,
+            unsupportedTypeHint = "Declare the property as a String, not as the enum class.",
+        )
+    return schema.plusField("examples", json.array(encoded.map { convertJsonElement(it) }))
+  }
+
+  /**
+   * The values of a provider, encoded with the serializer of the type of [property]. Fails fast,
+   * naming the property through [label], on each mistake an annotation with a provider cannot rule
+   * out at compile time, in this order: a property that does not serialize as a primitive, a
+   * provider that [readValues] cannot read, an empty provider, a value of another type, and a
+   * property-level serializer that changes the wire type.
+   *
+   * A property-level serializer that keeps the wire type but writes another value (a prefix, a case
+   * change) is not detected: the descriptor does not give the serializer of a property, so the
+   * values render as the type's serializer writes them.
+   */
+  private fun encodedValuesOf(
+      label: String,
+      readValues: () -> Set<Any>,
+      property: KProperty1<*, *>,
+      elementDescriptor: SerialDescriptor,
+      unsupportedTypeHint: String,
+  ): List<JsonElement> {
     val kind = serializedDescriptorOf(elementDescriptor).kind
     require(kind is PrimitiveKind) {
       "$label requires a property serialized as a primitive, but it serializes as $kind. " +
-          "For a fixed set of names, use an enum class."
+          unsupportedTypeHint
     }
-    val values = allowedValuesOf(allowedValues, label)
+    val values = readValues()
     require(values.isNotEmpty()) { "$label: the provider lists no values" }
 
     val propertyType = property.returnType.withNullability(false)
@@ -278,18 +344,7 @@ internal class SchemaWalk<NODE : Any>(
       "$label: the property's own serializer writes $kind, but its type's serializer does not, " +
           "so the values cannot be rendered as the property writes them"
     }
-    val encoded = values.map { kotlinxJson.encodeToJsonElement(serializer, it) }.distinct()
-
-    if (example != null && example !is JsonNull) {
-      require(example in encoded) {
-        "$label: the example value $example is not one of the allowed values $encoded"
-      }
-    }
-
-    val allowed =
-        encoded.map { convertJsonElement(it) } +
-            if (elementDescriptor.isNullable) listOf(json.nullNode()) else emptyList()
-    return schema.plusField("enum", json.array(allowed))
+    return values.map { kotlinxJson.encodeToJsonElement(serializer, it) }.distinct()
   }
 
   /** The descriptor whose kind reaches the wire: inline value classes and contextuals unwrapped. */
@@ -464,6 +519,11 @@ internal class SchemaWalk<NODE : Any>(
               jsonObj?.get(elementName),
               property?.returnType,
           )
+      val knownValues = property?.let { knownValuesOn(it) }
+      // Before either annotation is rendered, so a mistake in one of them cannot hide this one.
+      require(knownValues == null || allowedValuesOn(property) == null) {
+        "'$elementName' has @KnownValues and @AllowedValues: a set is open or closed, not both"
+      }
       val constrainedSchema =
           property
               ?.let { allowedValuesOn(it) }
@@ -477,9 +537,19 @@ internal class SchemaWalk<NODE : Any>(
                     jsonObj?.get(elementName),
                 )
               } ?: elementSchema
+      val exemplifiedSchema =
+          knownValues?.let {
+            withKnownValues(
+                constrainedSchema,
+                it,
+                property,
+                descriptor.getElementDescriptor(i),
+                elementName,
+            )
+          } ?: constrainedSchema
       val describedSchema =
-          descriptionOf(property, constrainedSchema)?.let { withDescription(constrainedSchema, it) }
-              ?: constrainedSchema
+          descriptionOf(property, exemplifiedSchema)?.let { withDescription(exemplifiedSchema, it) }
+              ?: exemplifiedSchema
       val deprecatedSchema =
           if (isDeprecated(property)) withDeprecatedMarker(describedSchema) else describedSchema
 

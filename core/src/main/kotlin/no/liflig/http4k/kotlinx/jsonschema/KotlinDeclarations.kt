@@ -117,15 +117,28 @@ internal fun allowedValuesOn(property: KProperty1<*, *>): AllowedValues? =
  * The values of the provider [annotation] names, read from its `object` instance. [label] names the
  * annotated property in the error thrown when the provider is not an `object`.
  */
-internal fun allowedValuesOf(annotation: AllowedValues, label: String): Set<Any> {
-  val provider =
-      annotation.provider.objectInstance
-          ?: throw IllegalArgumentException(
-              "$label: ${annotation.provider.qualifiedName} must be declared as an `object`, " +
-                  "so its values can be read without constructing it"
-          )
-  return provider.values
-}
+internal fun allowedValuesOf(annotation: AllowedValues, label: String): Set<Any> =
+    objectInstanceOf(annotation.provider, label).values
+
+/**
+ * The [KnownValues] declared on [property] itself or on its getter, so the `@get:KnownValues`
+ * use-site form works, as it does for [AllowedValues].
+ */
+internal fun knownValuesOn(property: KProperty1<*, *>): KnownValues? =
+    (property.annotations + property.getter.annotations)
+        .filterIsInstance<KnownValues>()
+        .firstOrNull()
+
+/** The values of the provider [annotation] names, read as [allowedValuesOf] reads them. */
+internal fun knownValuesOf(annotation: KnownValues, label: String): Set<Any> =
+    objectInstanceOf(annotation.provider, label).values
+
+private fun <T : Any> objectInstanceOf(provider: KClass<T>, label: String): T =
+    provider.objectInstance
+        ?: throw IllegalArgumentException(
+            "$label: ${provider.qualifiedName} must be declared as an `object`, " +
+                "so its values can be read without constructing it"
+        )
 
 /** The [Description] declared on [kClass], if any. */
 internal fun descriptionOn(kClass: KClass<*>?): String? =
